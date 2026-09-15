@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = ["crates/inception-core", "crates/inception-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/ongkanghao/project-inception"
+
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+# `preserve_order` keeps JSON object keys in file order instead of sorting them.
+# Without it we lose the user's key ordering before it ever reaches our tree,
+# which matters for display now and for surgical writes in M2.
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
+toml = "1.1"
+# Format-PRESERVING TOML editing. This crate is the single biggest reason the
+# project is in Rust: it is what `cargo add` uses to edit Cargo.toml without
+# mangling it, and there is no JS equivalent.
+toml_edit = "0.25"
+# `cst` gives the comment-preserving concrete syntax tree used for writes.
+jsonc-parser = { version = "0.33", features = ["serde", "cst"] }
+yaml-rust2 = "0.13"
+thiserror = "2.0"
+walkdir = "2.5"
+dirs = "7.0"
+sha2 = "0.11"
+clap = { version = "4.6", features = ["derive"] }
+anyhow = "1.0"
+# Unified diffs for the deploy preview (F-5.3).
+similar = "3.2"
+# OS keychain: Windows Credential Manager / macOS Keychain / Secret Service (F-7.2).
+keyring = { version = "4.2", features = [
+    "windows-native-keyring-store",
+    "apple-native-keyring-store",
+    "zbus-secret-service-keyring-store",
+] }

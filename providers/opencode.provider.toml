@@ -1,0 +1,100 @@
+# OpenCode
+# Docs: https://opencode.ai/docs/mcp-servers/
+#
+# The structurally hardest of the five: merged argv array, renamed env key, its own
+# enabled flag, and two possible config filenames.
+
+schema_version = 1
+
+id       = "opencode"
+name     = "OpenCode"
+homepage = "https://opencode.ai"
+
+[home]
+default = "{config}/opencode"        # ~/.config/opencode | %APPDATA%/opencode
+
+# ---------------------------------------------------------------- files
+
+# .jsonc is preferred when both exist. Both are parsed as JSONC regardless —
+# HarnessKit shipped a bug where a single // comment in opencode.json silently
+# emptied their MCP list.
+[[files]]
+id     = "global"
+scope  = "user"
+format = "jsonc"
+path   = ["{home}/opencode.jsonc", "{home}/opencode.json"]
+
+[[files]]
+id     = "project"
+scope  = "project"
+format = "jsonc"
+path   = ["{project}/opencode.jsonc", "{project}/opencode.json"]
+
+# ---------------------------------------------------------------- mcp
+
+[mcp]
+supported = true
+
+[[mcp.locations]]
+file    = "global"
+scope   = "user"
+pointer = "/mcp"                     # not "mcpServers"
+
+[[mcp.locations]]
+file    = "project"
+scope   = "project"
+pointer = "/mcp"
+
+[mcp.transport]
+strategy = "type-value"
+key      = "type"
+absent   = "stdio"
+
+[mcp.transport.read]
+local  = "stdio"
+remote = "http"
+
+# Lossy by nature: OpenCode has one "remote" bucket, so sse and http both land
+# there. Round-tripping sse -> opencode -> back yields http. Flagged on deploy.
+[mcp.transport.write]
+stdio = "local"
+http  = "remote"
+sse   = "remote"
+
+[mcp.fields]
+# command holds BOTH the executable and its arguments: ["uvx", "mcp-obsidian"]
+command = { key = "command", form = "argv-array", absorbs = "args" }
+env     = { key = "environment" }    # not "env"
+url     = { key = "url" }
+headers = { key = "headers" }
+enabled = { key = "enabled", default = true }
+
+[mcp.capabilities]
+transports = ["stdio", "http", "sse"]
+headers    = true
+env        = true
+
+# ---------------------------------------------------------------- skills
+
+[skills]
+supported = true
+layout    = "dir-with-skill-md"
+exclude   = [".*"]
+
+[[skills.dirs]]
+scope     = "user"
+path      = "{home}/skills"
+canonical = true                     # private dir, so "deploy to opencode only" works
+
+[[skills.dirs]]
+scope  = "user"
+path   = "{user_home}/.agents/skills"
+shared = true                        # planner prefers this for multi-target deploys
+
+[[skills.dirs]]
+scope     = "project"
+path      = "{project}/.opencode/skills"
+canonical = true
+
+[skills.frontmatter]
+required = ["name", "description"]

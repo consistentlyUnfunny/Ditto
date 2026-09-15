@@ -1,0 +1,276 @@
+//! Configuration health checks (T-3.16, F-8, NF-4.4).
+//!
+//! Read-only. `doctor` reports; it never fixes anything on its own, because the
+//! things it finds — a deprecated path, a plaintext key — are the user's
+//! decisions to make.
+
+use crate::discover::DetectedProvider;
+use crate::inventory::{self, DriftStatus};
+use crate::mcp;
+use crate::skills::SkillState;
+use crate::spec::Scope;
+use crate::tree::FileState;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Severity {
+    /// Worth knowing, nothing wrong.
+    Info,
+    /// Something will probably bite later.
+    Warning,
+    /// A credential or a permission grant.
+    Security,
+}
+
+impl Severity {
+    pub fn label(self) -> &'static str {
+        match self {
+            Severity::Info => "info",
+            Severity::Warning => "warn",
+            Severity::Security => "SECURITY",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Finding {
+    pub severity: Severity,
+    pub provider: Option<String>,
+    pub message: String,
+    /// What to do about it, when there is an obvious answer.
+    pub suggestion: Option<String>,
+}
+
+/// Run every check. Findings come back most severe first.
+pub fn check(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    for provider in providers {
+        if !provider.installed {
+            continue;
+        }
+
+        // A config we cannot parse is also a config we will refuse to write.
+        for file in provider.invalid_files() {
+            if let FileState::Invalid(reason) = &file.state {
+                findings.push(Finding {
+                    severity: Severity::Warning,
+                    provider: Some(provider.id().to_string()),
+                    message: format!("{} cannot be parsed: {reason}", file.path.display()),
+                    suggestion: Some(
+                        "deploys to this harness will be refused until it parses".to_string(),
+                    ),
+                });
+            }
+        }
+
+        // Skills sitting in a location the harness no longer documents.
+        for dir in provider.deprecated_in_use() {
+            let canonical = provider
+                .skill_dirs
+                .iter()
+                .find(|d| d.scope == dir.scope && d.canonical)
+                .map(|d| d.path.display().to_string());
+            findings.push(Finding {
+                severity: Severity::Warning,
+                provider: Some(provider.id().to_string()),
+                message: format!("{} is a deprecated skill location", dir.path.display()),
+                suggestion: canonical.map(|c| {
+                    format!("move these skills to {c}, where more harnesses can see them")
+                }),
+            });
+        }
+    }
+
+    // --- MCP servers ------------------------------------------------------
+    for location in inventory::mcp_servers(providers, scope) {
+        let server = &location.server;
+
+        // NF-4.4: credential-shaped values stored in cleartext.
+        let secrets = server.secret_like();
+        if !secrets.is_empty() {
+            findings.push(Finding {
+                severity: Severity::Security,
+                provider: Some(location.provider.clone()),
+                message: format!(
+                    "server '{}' stores {} in plaintext in {}",
+                    server.name,
+                    secrets.join(", "),
+                    location.file.display()
+                ),
+                suggestion: Some(
+                    "run `inception import` to move it into the OS keychain".to_string(),
+                ),
+            });
+        }
+
+        // Gemini's `trust = true` disables per-tool confirmation.
+        if server.extra.get("trust").and_then(crate::Value::as_bool) == Some(true) {
+            findings.push(Finding {
+                severity: Severity::Security,
+                provider: Some(location.provider.clone()),
+                message: format!(
+                    "server '{}' sets trust = true, which bypasses tool-call confirmation",
+                    server.name
+                ),
+                suggestion: None,
+            });
+        }
+
+        // Typo protection: a key close to a documented one but not quite it.
+        if let Some(spec) = providers
+            .iter()
+            .find(|p| p.id() == location.provider)
+            .and_then(|p| p.spec.mcp.as_ref())
+            && !spec.extra.known.is_empty()
+        {
+            for key in server.extra.keys() {
+                if spec.extra.known.iter().any(|k| k == key) {
+                    continue;
+                }
+                if let Some(near) = spec.extra.known.iter().find(|k| close(k, key)) {
+                    findings.push(Finding {
+                        severity: Severity::Warning,
+                        provider: Some(location.provider.clone()),
+                        message: format!(
+                            "server '{}' has key '{key}', which looks like a typo",
+                            server.name
+                        ),
+                        suggestion: Some(format!("did you mean '{near}'?")),
+                    });
+                }
+            }
+        }
+    }
+
+    // --- Skills -----------------------------------------------------------
+    for group in inventory::skills(providers, scope) {
+        match group.status {
+            DriftStatus::Drifted => findings.push(Finding {
+                severity: Severity::Warning,
+                provider: None,
+                message: format!(
+                    "skill '{}' differs between {}",
+                    group.identity,
+                    group.providers().join(" and ")
+                ),
+                suggestion: Some(format!(
+                    "`inception drift` shows the difference; `inception deploy {}` overwrites \
+                     from one source",
+                    group.identity
+                )),
+            }),
+            DriftStatus::Problem => {
+                for location in &group.locations {
+                    let detail = match &location.entry.state {
+                        SkillState::MissingSkillMd => "has no SKILL.md",
+                        SkillState::Invalid(_) => "could not be read",
+                        SkillState::Ok(_) => continue,
+                    };
+                    findings.push(Finding {
+                        severity: Severity::Warning,
+                        provider: None,
+                        message: format!("{} {detail}", location.path.display()),
+                        suggestion: Some(
+                            "the harness will ignore this directory; remove it or add a SKILL.md"
+                                .to_string(),
+                        ),
+                    });
+                }
+            }
+            DriftStatus::Identical | DriftStatus::Unique => {}
+        }
+    }
+
+    // Most severe first. `Reverse` because the derived ordering puts Info first.
+    findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
+    findings
+}
+
+/// Cheap near-match: same length, differing in at most two characters, or one is
+/// the other with a character dropped. Enough to catch `startup_timout_sec`
+/// without pulling in an edit-distance crate.
+fn close(known: &str, candidate: &str) -> bool {
+    if known == candidate {
+        return false;
+    }
+    let (a, b) = (known.as_bytes(), candidate.as_bytes());
+    if a.len().abs_diff(b.len()) > 1 {
+        return false;
+    }
+    if a.len() == b.len() {
+        let differing = a.iter().zip(b).filter(|(x, y)| x != y).count();
+        return differing > 0 && differing <= 2;
+    }
+    // One character inserted or deleted.
+    let (long, short) = if a.len() > b.len() { (a, b) } else { (b, a) };
+    let mut skipped = false;
+    let mut j = 0;
+    for &c in long {
+        if j < short.len() && short[j] == c {
+            j += 1;
+        } else if skipped {
+            return false;
+        } else {
+            skipped = true;
+        }
+    }
+    j == short.len()
+}
+
+/// Whether a stored reference still resolves, for a keychain health check.
+pub fn dangling_references(
+    providers: &[DetectedProvider<'_>],
+    scope: Scope,
+    store: &dyn crate::secrets::SecretStore,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for location in inventory::mcp_servers(providers, scope) {
+        for (key, secret) in location.server.env.iter().chain(location.server.headers.iter()) {
+            if let mcp::Secret::Ref(name) = secret
+                && !store.exists(name)
+            {
+                findings.push(Finding {
+                    severity: Severity::Warning,
+                    provider: Some(location.provider.clone()),
+                    message: format!(
+                        "server '{}' references secret '{name}' for {key}, which is not in the \
+                         keychain",
+                        location.server.name
+                    ),
+                    suggestion: Some("deploys involving this server will fail".to_string()),
+                });
+            }
+        }
+    }
+    findings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn near_match_catches_a_dropped_character() {
+        assert!(close("startup_timeout_sec", "startup_timout_sec"));
+    }
+
+    #[test]
+    fn near_match_catches_a_transposition() {
+        assert!(close("tool_timeout_sec", "tool_timeuot_sec"));
+    }
+
+    #[test]
+    fn near_match_ignores_identical_and_unrelated() {
+        assert!(!close("startup_timeout_sec", "startup_timeout_sec"));
+        assert!(!close("startup_timeout_sec", "command"));
+        assert!(!close("trust", "includeTools"));
+    }
+
+    #[test]
+    fn severity_orders_security_highest() {
+        let mut all = [Severity::Info, Severity::Security, Severity::Warning];
+        all.sort_by(|a, b| b.cmp(a));
+        assert_eq!(all[0], Severity::Security);
+        assert_eq!(all[2], Severity::Info);
+    }
+}

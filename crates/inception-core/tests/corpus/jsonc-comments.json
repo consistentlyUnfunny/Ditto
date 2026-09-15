@@ -1,0 +1,11 @@
+// Leading line comment.
+{
+  /* block comment */
+  "alpha": 1, // trailing comment
+  "servers": {
+    // comment inside nested object
+    "one": { "command": "a" },
+    "two": { "command": "b" }
+  },
+  "last": true,
+}

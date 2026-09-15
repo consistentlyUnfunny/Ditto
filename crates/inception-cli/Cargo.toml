@@ -1,0 +1,20 @@
+[package]
+name = "inception-cli"
+description = "Command-line interface for project-inception."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "inception"
+path = "src/main.rs"
+
+[dependencies]
+inception-core = { path = "../inception-core" }
+clap.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

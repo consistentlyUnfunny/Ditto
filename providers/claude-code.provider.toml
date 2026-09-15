@@ -1,0 +1,107 @@
+# Claude Code
+# Docs: https://code.claude.com/docs/en/mcp  https://code.claude.com/docs/en/skills
+#
+# The odd one out on both counts:
+#   - MCP lives in ~/.claude.json, NOT ~/.claude/settings.json
+#   - it is the only harness that refuses ~/.agents/skills
+
+schema_version = 1
+
+id       = "claude-code"
+name     = "Claude Code"
+homepage = "https://code.claude.com"
+
+[home]
+default = "~/.claude"
+
+# ---------------------------------------------------------------- files
+
+[[files]]
+id     = "user_json"
+scope  = "user"
+format = "jsonc"
+path   = "{user_home}/.claude.json"
+
+[[files]]
+id     = "project_mcp"
+scope  = "project"
+format = "jsonc"
+path   = "{project}/.mcp.json"
+
+# ---------------------------------------------------------------- mcp
+
+[mcp]
+supported = true
+
+# User scope: loads in every project.
+[[mcp.locations]]
+file    = "user_json"
+scope   = "user"
+pointer = "/mcpServers"
+
+# Local scope: same file, namespaced under the absolute project path.
+# {project_path} is JSON Pointer-escaped, so C:/Users/User -> C:~1Users~1User.
+[[mcp.locations]]
+file    = "user_json"
+scope   = "local"
+pointer = "/projects/{project_path}/mcpServers"
+
+# Project scope: committed to git.
+[[mcp.locations]]
+file    = "project_mcp"
+scope   = "project"
+pointer = "/mcpServers"
+
+[mcp.transport]
+strategy = "type-value"
+key      = "type"
+absent   = "stdio"
+
+[mcp.transport.read]
+http              = "http"
+"streamable-http" = "http"
+sse               = "sse"
+ws                = "ws"
+
+# Claude Code errors on a `url` with no `type`, so remote entries always emit one.
+[mcp.transport.write]
+http  = "http"
+sse   = "sse"
+ws    = "ws"
+stdio = { omit = true }
+
+[mcp.fields]
+command = { key = "command" }
+args    = { key = "args" }
+env     = { key = "env" }
+url     = { key = "url" }
+headers = { key = "headers" }
+
+[mcp.capabilities]
+# Only harness supporting websocket transport.
+transports = ["stdio", "http", "sse", "ws"]
+headers    = true
+env        = true
+
+# ---------------------------------------------------------------- skills
+
+[skills]
+supported = true
+layout    = "dir-with-skill-md"
+exclude   = [".*"]
+
+# NOTE: deliberately no ~/.agents/skills entry. The docs are explicit:
+# "Claude Code does not read ~/.agents/skills/. Use ~/.claude/skills/ instead."
+# This is why deploying a skill everywhere needs two writes, not one.
+[[skills.dirs]]
+scope     = "user"
+path      = "{home}/skills"
+canonical = true
+
+[[skills.dirs]]
+scope     = "project"
+path      = "{project}/.claude/skills"
+canonical = true
+
+[skills.frontmatter]
+required = ["name", "description"]

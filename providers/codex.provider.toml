@@ -1,0 +1,96 @@
+# Codex CLI
+# Docs: https://developers.openai.com/codex/mcp  https://learn.chatgpt.com/docs/build-skills
+#
+# The only TOML harness — and therefore the one that exposes whether our writer
+# actually preserves formatting. HarnessKit rewrites this file wholesale.
+
+schema_version = 1
+
+id       = "codex"
+name     = "Codex CLI"
+homepage = "https://developers.openai.com/codex"
+
+[home]
+env     = "CODEX_HOME"
+default = "~/.codex"
+
+# ---------------------------------------------------------------- files
+
+[[files]]
+id     = "global"
+scope  = "user"
+format = "toml"
+path   = "{home}/config.toml"
+
+[[files]]
+id     = "project"
+scope  = "project"
+format = "toml"
+path   = "{project}/.codex/config.toml"
+
+# ---------------------------------------------------------------- mcp
+
+[mcp]
+supported = true
+
+[[mcp.locations]]
+file    = "global"
+scope   = "user"
+pointer = "/mcp_servers"
+
+[[mcp.locations]]
+file    = "project"
+scope   = "project"
+pointer = "/mcp_servers"
+
+# No type/discriminator key at all — a url means remote, otherwise stdio.
+[mcp.transport]
+strategy = "url-presence"
+key      = "url"
+remote   = "http"
+
+[mcp.fields]
+command = { key = "command" }
+args    = { key = "args" }
+env     = { key = "env" }
+url     = { key = "url" }
+headers = { key = "http_headers" }   # renamed here vs everyone else
+
+[mcp.capabilities]
+transports = ["stdio", "http"]
+headers    = true
+env        = true
+
+[mcp.extra]
+# Preserved verbatim on round-trip. Listed only so `doctor` can catch typos.
+# bearer_token_env_var is Codex's native secret indirection — prefer it over
+# writing a literal token (REQUIREMENTS.md F-7.5).
+known = ["startup_timeout_sec", "tool_timeout_sec", "bearer_token_env_var"]
+
+# ---------------------------------------------------------------- skills
+
+[skills]
+supported = true
+layout    = "dir-with-skill-md"
+exclude   = [".*"]                   # skips the harness-managed .system/ dir
+
+[[skills.dirs]]
+scope     = "user"
+path      = "{user_home}/.agents/skills"
+shared    = true                     # OpenCode, Gemini and Copilot read this too
+canonical = true
+
+# Current docs no longer list this path, but real installs still use it — the dev
+# machine has six skills here. Scanned and reported, never written to.
+[[skills.dirs]]
+scope      = "user"
+path       = "{home}/skills"
+deprecated = true
+
+[[skills.dirs]]
+scope     = "project"
+path      = "{project}/.agents/skills"
+canonical = true
+
+[skills.frontmatter]
+required = ["name", "description"]

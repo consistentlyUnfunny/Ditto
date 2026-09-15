@@ -1,0 +1,95 @@
+# GitHub Copilot CLI
+# Docs: https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference
+#
+# Gotcha: the MCP map key is "servers", NOT "mcpServers". Easy to copy wrong from
+# the other JSON harnesses.
+
+schema_version = 1
+
+id       = "copilot-cli"
+name     = "GitHub Copilot CLI"
+homepage = "https://docs.github.com/en/copilot"
+
+[home]
+env     = "COPILOT_HOME"
+default = "~/.copilot"
+
+# ---------------------------------------------------------------- files
+
+[[files]]
+id     = "mcp"
+scope  = "user"
+format = "jsonc"
+path   = "{home}/mcp-config.json"
+
+# Not used for MCP or skills — declared so `status` can detect an install and so
+# `doctor` can read it. On the dev machine this file opens with two // comment
+# lines, which is the concrete reason every .json here is parsed as JSONC.
+[[files]]
+id     = "settings"
+scope  = "user"
+format = "jsonc"
+path   = "{home}/config.json"
+
+# ---------------------------------------------------------------- mcp
+
+[mcp]
+supported = true
+
+[[mcp.locations]]
+file    = "mcp"
+scope   = "user"
+pointer = "/servers"
+
+[mcp.transport]
+strategy = "type-value"
+key      = "type"
+absent   = "stdio"
+
+[mcp.transport.read]
+local = "stdio"
+http  = "http"
+sse   = "sse"
+
+[mcp.transport.write]
+stdio = "local"
+http  = "http"
+sse   = "sse"
+
+[mcp.fields]
+command = { key = "command" }
+args    = { key = "args" }
+env     = { key = "env" }
+url     = { key = "url" }
+headers = { key = "headers" }
+
+[mcp.capabilities]
+transports = ["stdio", "http", "sse"]
+headers    = true
+env        = true
+
+# ---------------------------------------------------------------- skills
+
+[skills]
+supported = true
+layout    = "dir-with-skill-md"
+exclude   = [".*"]
+
+[[skills.dirs]]
+scope     = "user"
+path      = "{home}/skills"
+canonical = true
+
+[[skills.dirs]]
+scope  = "user"
+path   = "{user_home}/.agents/skills"
+shared = true
+
+# Project scope is .github/skills, not .copilot/skills.
+[[skills.dirs]]
+scope     = "project"
+path      = "{project}/.github/skills"
+canonical = true
+
+[skills.frontmatter]
+required = ["name", "description"]

@@ -1,0 +1,18 @@
+{
+  "hasCompletedOnboarding": true,
+  "mcpServers": null,
+  "projects": {
+    "C:/Users/User": {
+      "mcpServers": {
+        "notion": {
+          "type": "http",
+          "url": "https://mcp.notion.com/mcp"
+        }
+      },
+      "allowedTools": []
+    },
+    "D:/Projects/project-inception": {
+      "allowedTools": []
+    }
+  }
+}

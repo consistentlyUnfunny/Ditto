@@ -1,0 +1,30 @@
+[package]
+name = "inception-core"
+description = "Translation engine for agent harness configuration: skills and MCP servers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# No Tauri, no GUI, no network. This crate is the whole engine (REQUIREMENTS NF-5.1).
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+jsonc-parser.workspace = true
+yaml-rust2.workspace = true
+thiserror.workspace = true
+walkdir.workspace = true
+dirs.workspace = true
+sha2.workspace = true
+similar.workspace = true
+keyring.workspace = true
+
+# `toml` (the plain value model) is used in tests only, to reproduce the
+# competitors' lossy approach for the head-to-head comparison.
+[dev-dependencies]
+toml.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

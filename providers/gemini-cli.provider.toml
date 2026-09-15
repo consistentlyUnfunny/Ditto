@@ -1,0 +1,101 @@
+# Gemini CLI
+# Docs: https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/mcp-server.md
+#
+# Unique transport model: the KEY NAME is the discriminator, not a value.
+#   "url"     -> SSE
+#   "httpUrl" -> streamable HTTP
+# This is why the spec format needs a key-presence strategy at all.
+
+schema_version = 1
+
+id       = "gemini-cli"
+name     = "Gemini CLI"
+homepage = "https://github.com/google-gemini/gemini-cli"
+
+[home]
+default = "~/.gemini"
+
+# ---------------------------------------------------------------- files
+
+# OPEN QUESTION (TODO.md T-2.4): the documented path is {home}/settings.json, but
+# the dev machine has a post-migration layout — {home}/config/config.json plus an
+# empty {home}/config/mcp_config.json, with a .migrated marker. The schema of
+# mcp_config.json is UNVERIFIED because the file is zero bytes. It is listed as a
+# fallback candidate on the assumption it holds the same mcpServers shape; that
+# assumption must be confirmed against a populated file before we ever write to it.
+[[files]]
+id     = "global"
+scope  = "user"
+format = "jsonc"
+path   = ["{home}/settings.json", "{home}/config/mcp_config.json"]
+
+[[files]]
+id     = "project"
+scope  = "project"
+format = "jsonc"
+path   = "{project}/.gemini/settings.json"
+
+# ---------------------------------------------------------------- mcp
+
+[mcp]
+supported = true
+
+[[mcp.locations]]
+file    = "global"
+scope   = "user"
+pointer = "/mcpServers"
+
+[[mcp.locations]]
+file    = "project"
+scope   = "project"
+pointer = "/mcpServers"
+
+[mcp.transport]
+strategy = "key-presence"
+absent   = "stdio"
+
+[mcp.transport.keys]
+sse  = "url"
+http = "httpUrl"
+
+[mcp.fields]
+command = { key = "command" }
+args    = { key = "args" }
+env     = { key = "env" }
+headers = { key = "headers" }
+# No `url` field entry: the transport strategy owns both url keys.
+
+[mcp.capabilities]
+transports = ["stdio", "http", "sse"]
+headers    = true
+env        = true
+
+[mcp.extra]
+# `trust = true` bypasses per-tool confirmation — security-relevant, so `doctor`
+# should surface it. `timeout` is in milliseconds, default 600000.
+known = ["timeout", "trust", "includeTools", "excludeTools"]
+
+# ---------------------------------------------------------------- skills
+
+[skills]
+supported = true
+layout    = "dir-with-skill-md"
+exclude   = [".*"]
+
+[[skills.dirs]]
+scope     = "user"
+path      = "{home}/skills"
+canonical = true
+
+[[skills.dirs]]
+scope  = "user"
+path   = "{user_home}/.agents/skills"
+shared = true
+
+[[skills.dirs]]
+scope     = "project"
+path      = "{project}/.gemini/skills"
+canonical = true
+
+[skills.frontmatter]
+required = ["name", "description"]

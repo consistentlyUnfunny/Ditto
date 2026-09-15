@@ -1,0 +1,25 @@
+# Top-of-file comment.
+model = "gpt-5.6-sol"          # trailing comment
+literal_path = 'C:\Users\User\escapes'
+basic_path = "C:\\Users\\User\\escaped"
+multiline = """
+a
+b"""
+literal_multiline = '''
+raw \n stays
+'''
+
+[projects.'D:\Downloads\blog-agents']
+trust_level = "trusted"
+
+[projects."quoted.dotted.key"]
+trust_level = "trusted"
+
+# Comment directly above a table.
+[mcp_servers.example]
+command = 'C:\tools\srv.exe'
+args = ["--flag", "value"]
+
+[mcp_servers.example.env]
+KEY = 'literal'
+OTHER = "basic"
