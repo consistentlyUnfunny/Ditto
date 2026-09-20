@@ -165,6 +165,7 @@ Global `mcpServers` in `~/.claude.json` is `null`, not `{}`.
 | `.json` files containing `//` comments | **[verified: machine]** `~/.copilot/config.json` opens with two `//` lines. Parse *all* JSON as JSONC. |
 | Zero-byte config files | **[verified: machine]** `~/.gemini/config/mcp_config.json` is 0 bytes. Must not error. |
 | Hidden system skill dirs | **[verified: machine]** `~/.codex/skills/.system/` holds Codex-managed skills. Exclude dot-prefixed dirs from user inventory. |
+| Harness-managed buckets that are **not** dot-prefixed | **[verified: machine, 2026-09-20]** `~/.claude/skills/synced/<uuid>/` is Claude Code's own sync target, holding its built-in skills (pdf, docx, xlsx, pptx, skill-creator, mcp-builder). A `.*` exclusion does not catch it, and a scanner that misses this reports `synced` as a broken skill with no `SKILL.md`. Named explicitly in `claude-code.provider.toml`. Real skills sit two levels down, so this is a container, not a skill. |
 | Layout drift between versions | **[verified: machine]** This machine has `~/.gemini/config/config.json` + `mcp_config.json` (post-migration, `.migrated` marker), *not* the documented `~/.gemini/settings.json`. Specs need ordered candidate paths. |
 | TOML literal vs basic strings | **[verified: machine]** `~/.codex/config.toml` uses `'...'` for Windows paths throughout. |
 | Missing vs empty vs null | Gemini's mcp file exists but is empty; Claude's global `mcpServers` is `null`. Three distinct "nothing here" states. |

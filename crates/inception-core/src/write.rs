@@ -27,11 +27,39 @@ pub fn backup_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".inception").join("backups"))
 }
 
+/// Where backups go for one run.
+///
+/// Exists so tests can keep their backups out of the real home directory — the
+/// first version of the test suite quietly filled `~/.inception/backups` with
+/// fixtures, which would have been indistinguishable from real ones next time
+/// the user went looking for something to restore.
+#[derive(Debug, Clone, Default)]
+pub struct Options {
+    pub backup_dir: Option<PathBuf>,
+}
+
+impl Options {
+    pub fn with_backup_dir(dir: impl Into<PathBuf>) -> Options {
+        Options { backup_dir: Some(dir.into()) }
+    }
+
+    fn resolve(&self) -> Result<PathBuf> {
+        match &self.backup_dir {
+            Some(dir) => Ok(dir.clone()),
+            None => backup_dir().ok_or(Error::NoSuchDirectory { what: "home" }),
+        }
+    }
+}
+
 /// Back up `path`, then atomically replace it with `content`.
 ///
 /// If the file already holds exactly `content`, nothing is written and no backup
 /// is taken — a no-op deploy should not churn the backup directory.
 pub fn save(path: &Path, content: &str) -> Result<SaveReport> {
+    save_with(path, content, &Options::default())
+}
+
+pub fn save_with(path: &Path, content: &str, options: &Options) -> Result<SaveReport> {
     let existing = match std::fs::read_to_string(path) {
         Ok(text) => Some(text),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -48,7 +76,7 @@ pub fn save(path: &Path, content: &str) -> Result<SaveReport> {
     }
 
     let backup = match &existing {
-        Some(text) => Some(write_backup(path, text)?),
+        Some(text) => Some(write_backup(path, text, options)?),
         None => None,
     };
 
@@ -66,8 +94,8 @@ pub fn save(path: &Path, content: &str) -> Result<SaveReport> {
 ///
 /// Named `<unix-seconds>-<flattened path>` so backups sort chronologically and
 /// the original location is readable without an index file.
-pub fn write_backup(path: &Path, content: &str) -> Result<PathBuf> {
-    let dir = backup_dir().ok_or(Error::NoSuchDirectory { what: "home" })?;
+pub fn write_backup(path: &Path, content: &str, options: &Options) -> Result<PathBuf> {
+    let dir = options.resolve()?;
     std::fs::create_dir_all(&dir).map_err(Error::reading(&dir))?;
 
     let stamp = SystemTime::now()

@@ -189,10 +189,21 @@ fn drift(project: Option<PathBuf>) -> Result<()> {
                         &skill.content_hash[..8],
                         location.path.display()
                     );
-                    println!("             providers: {}", location.providers.join(", "));
-                    println!("             description: {}", truncate(&skill.description, 70));
+                    println!("             {}", location.providers.join(", "));
                 }
                 None => println!("    ????     {}  (unreadable)", location.path.display()),
+            }
+        }
+
+        // Say *how* they differ, not just that they do.
+        if let Some(comparison) = inception_core::inventory::compare_copies(group)
+            && inception_core::diff::has_changes(&comparison.lines)
+        {
+            println!();
+            println!("    --- {}", comparison.left.display());
+            println!("    +++ {}", comparison.right.display());
+            for line in &comparison.lines {
+                println!("    {} {}", line.kind.sign(), truncate(&line.text, 96));
             }
         }
         println!();
@@ -318,11 +329,6 @@ fn deploy(name: String, to: String, yes: bool, project: Option<PathBuf>) -> Resu
 ",
                 group.locations.len(), source.display());
         }
-        // Do not deploy back into the directory we are reading from.
-        let targets: Vec<String> = targets
-            .into_iter()
-            .filter(|t| !group.locations.iter().any(|l| l.providers.contains(t) && l.path == source))
-            .collect();
         plan::skill_deploy(&found, &targets, &source, scope)
     } else {
         let servers = inception_core::inventory::mcp_servers(&found, scope);

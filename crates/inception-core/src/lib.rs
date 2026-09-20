@@ -13,6 +13,7 @@
 //!
 //! This crate has no GUI and no network dependency (NF-4.2, NF-5.1).
 
+pub mod diff;
 pub mod discover;
 pub mod doctor;
 pub mod editor;

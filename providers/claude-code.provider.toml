@@ -88,7 +88,11 @@ env        = true
 [skills]
 supported = true
 layout    = "dir-with-skill-md"
-exclude   = [".*"]
+# `synced` is Claude Code's own managed bucket: ~/.claude/skills/synced/<uuid>/
+# holds the built-in skills it syncs down (pdf, docx, xlsx, skill-creator, ...).
+# It is a container, not a skill, and listing it surfaces a directory the user
+# neither installed nor can meaningfully manage.
+exclude   = [".*", "synced"]
 
 # NOTE: deliberately no ~/.agents/skills entry. The docs are explicit:
 # "Claude Code does not read ~/.agents/skills/. Use ~/.claude/skills/ instead."

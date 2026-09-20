@@ -115,12 +115,22 @@ Codex's folder". Bolting a lockfile on without deciding that would be guesswork.
 - [x] **T-3.4** Minimum-write-set planner, per PROVIDER-SPEC §7 selection rule. *F-5.2*
 - [x] **T-3.5** Diff preview + confirmation. *F-5.3*
 - [x] **T-3.6** Skill deploy — copy dir incl. `scripts/`, `references/`, `assets/`. *F-5.1, F-5.6*
+- [x] **T-3.22** **Convergence.** A deploy overwrites every divergent copy a
+  target also reads, instead of installing alongside it. Found by using the GUI:
+  deploying `karpathy-coder` wrote it to `~/.agents/skills` but left OpenCode's
+  private copy in place, so OpenCode saw two versions and the matrix reported
+  everything as drifted. Pinned by
+  `deploying_overwrites_a_divergent_copy_the_target_also_reads`.
+- [x] **T-3.23** Skill writes that replace an existing copy show a diff of what
+  they destroy, in both the CLI and the GUI.
 - [x] **T-3.7** MCP deploy.
 - [x] **T-3.8** Surgical removal. *F-5.7*
 - [ ] **T-3.9** Lockfile `~/.inception/lock.toml`. *F-6.1, F-6.2* — blocked on the library-location decision (Q-7)
 - [ ] **T-3.10** Detect edited-in-place managed artifacts; offer re-import / overwrite / leave. *F-6.3*
 - [x] **T-3.11** Partial-failure reporting. *NF-2.4*
-- [x] **T-3.12** Drift detection + diff. *F-4.1–F-4.4*
+- [~] **T-3.12** Drift detection + diff. *F-4.1–F-4.3* — **skills only.** F-4.4
+  (same-named MCP servers whose canonical form differs) was never implemented;
+  this was ticked in error on 2026-09-16 and corrected on 2026-09-20.
 - [~] **T-3.13** Detection, keychain store and `Ref` resolution at emit are **done** (`secrets.rs`); the `import` command that promotes a literal is blocked on Q-7. *F-7.1–F-7.3*
 - [x] **T-3.14** Redaction everywhere. *F-7.4*
 - [ ] **T-3.15** Prefer native indirection (`bearer_token_env_var`). *F-7.5* — needs a spec field to declare it; not expressible in schema v1
@@ -135,14 +145,25 @@ Codex's folder". Bolting a lockfile on without deciding that would be guesswork.
 
 ---
 
-## M4 — Tauri GUI
+## M4 — Tauri GUI  *(matrix, drift, deploy and doctor working)*
 
-- [ ] **T-4.1** Tauri shell over `inception-core`; zero duplicated logic. *F-9.1*
-- [ ] **T-4.2** Inventory view grouped by skill/server, showing presence per provider.
-- [ ] **T-4.3** Drift view with side-by-side diff.
-- [ ] **T-4.4** Deploy flow with the same preview + confirm as the CLI. *F-9.2*
-- [ ] **T-4.5** File viewer/editor, diff before save. *F-9.3*
-- [ ] **T-4.6** Windows installer; verify on a clean machine.
+**Status 2026-09-20:** Tauri 2.11 shell in `crates/inception-gui`, frontend in
+`ui/` (Vite + vanilla TypeScript, zero runtime dependencies). Fonts bundled
+locally, so the app makes no network requests. Build with
+`cd crates/inception-gui/ui && npm run build`, then `cargo run -p inception-gui`.
+
+**Verified by running it:** the matrix renders the real machine — five columns,
+seven rows, the `karpathy-coder` drift staple and the `codex-primary-runtime`
+problem marker. **Not yet verified interactively:** the detail drawer, deploy
+preview and apply flow are wired and type-check, but no one has clicked them.
+
+- [x] **T-4.1** Tauri shell over `inception-core`; zero duplicated logic. *F-9.1*
+- [x] **T-4.2** Inventory view grouped by skill/server, showing presence per provider.
+- [x] **T-4.3** Drift view with side-by-side diff.
+- [x] **T-4.4** Deploy flow with the same preview + confirm as the CLI. *F-9.2*
+- [x] **T-4.7** Drift drawer shows a real line-by-line diff of the two copies.
+- [ ] **T-4.5** File viewer/editor, diff before save. *F-9.3* — the drawer shows content read-only; editing is not built
+- [ ] **T-4.6** Windows installer; verify on a clean machine. — needs the Tauri CLI (`cargo install tauri-cli`), not installed
 
 ---
 
@@ -169,6 +190,7 @@ Tracked rather than guessed at. Each needs an answer before the milestone that d
 | Q-4 | Is `~/.agents/skills` genuinely stable, or still a moving community proposal? | T-3.4 | The whole minimum-write-set advantage rests on it. Re-check before M3. |
 | Q-5 | Project-scope UX — explicit `--project` flag, or infer from cwd? | M5 | Inferring is friendlier and more dangerous. |
 | Q-6 | Should `deploy` offer to migrate deprecated paths, or only `doctor` report them? | T-5.2 | Migration mutates state the user didn't ask about. Lean report-only. |
+| Q-8 | Should the GUI follow the OS theme, or stay committed to the slate-and-paper world? | M4 polish | It currently commits. Theme-following would mean designing a light chassis that keeps "paper = file content" meaningful. |
 | Q-7 | Where does an **imported** artifact live? A managed library under `~/.inception/`, or does the tool stay stateless and always deploy harness-to-harness? | T-3.9, T-3.10, T-3.13 | Everything about provenance, drift resolution and `import` depends on this. A library makes "which copy is canonical?" answerable — `deploy` currently just picks the first readable one and says so. Stateless keeps the tool honest about being a translator, not a store. |
 
 ---

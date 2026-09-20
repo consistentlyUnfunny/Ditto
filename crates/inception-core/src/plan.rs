@@ -13,6 +13,7 @@
 //! skips.
 
 use crate::discover::DetectedProvider;
+use crate::diff::DiffLine;
 use crate::editor::Editor;
 use crate::emit;
 use crate::error::{Error, Result};
@@ -54,6 +55,9 @@ pub struct SkillWrite {
     pub dest: PathBuf,
     /// Why this destination was chosen — shown in the preview.
     pub reason: String,
+    /// True when `dest` already holds a copy whose content differs. The preview
+    /// shows the diff, because this write destroys what is there.
+    pub replaces_divergent: bool,
 }
 
 #[derive(Debug)]
@@ -232,7 +236,10 @@ pub fn skill_deploy(
         }
     };
 
-    // Which targets are usable at all.
+    // Which targets are usable at all. `pending` is drained as writes are
+    // assigned; `valid` keeps the full list, because convergence below has to
+    // consider a harness even when it needs no write of its own.
+    let mut valid: Vec<String> = Vec::new();
     let mut pending: Vec<&DetectedProvider<'_>> = Vec::new();
     for target in targets {
         match providers.iter().find(|p| p.id() == target) {
@@ -248,7 +255,10 @@ pub fn skill_deploy(
                 provider: target.clone(),
                 reason: "does not support skills".to_string(),
             }),
-            Some(p) => pending.push(p),
+            Some(p) => {
+                valid.push(p.id().to_string());
+                pending.push(p);
+            }
         }
     }
 
@@ -285,6 +295,7 @@ pub fn skill_deploy(
             source: source.to_path_buf(),
             dest: path.join(&skill_name),
             reason: format!("shared directory read by {}", covered.join(", ")),
+            replaces_divergent: differs(source, &path.join(&skill_name)),
         }));
         pending.retain(|p| !covered.iter().any(|id| id == p.id()));
     }
@@ -312,6 +323,7 @@ pub fn skill_deploy(
                 } else {
                     format!("{}'s own directory", provider.id())
                 },
+                replaces_divergent: differs(source, &dir.path.join(&skill_name)),
             })),
             None => plan.refusals.push(Refusal {
                 provider: provider.id().to_string(),
@@ -320,7 +332,71 @@ pub fn skill_deploy(
         }
     }
 
+    // --- converge, don't just add ------------------------------------------
+    //
+    // A harness usually reads several skill directories. Writing the source into
+    // one of them while a *different*, divergent copy sits in another leaves that
+    // harness seeing two versions of the same skill — which is worse than the
+    // drift we set out to fix. So every other copy a target can see is
+    // overwritten too, and the preview shows each as a replacement.
+    let destinations: Vec<PathBuf> = plan
+        .steps
+        .iter()
+        .filter_map(|s| match s {
+            Step::Skill(w) => Some(w.dest.clone()),
+            _ => None,
+        })
+        .collect();
+
+    let mut extra: Vec<SkillWrite> = Vec::new();
+    for target in &valid {
+        let Some(provider) = providers.iter().find(|p| p.id() == target) else {
+            continue;
+        };
+        for dir in provider.skill_dirs.iter().filter(|d| d.scope == scope && d.exists) {
+            let existing = dir.path.join(&skill_name);
+            if !existing.is_dir()
+                || existing == source
+                || destinations.contains(&existing)
+                || extra.iter().any(|w| w.dest == existing)
+            {
+                continue;
+            }
+            if !differs(source, &existing) {
+                continue; // already agrees; nothing to converge
+            }
+            extra.push(SkillWrite {
+                providers: vec![target.clone()],
+                source: source.to_path_buf(),
+                dest: existing,
+                reason: format!(
+                    "{target} reads this directory too; a different copy here would 
+                     shadow the one being installed"
+                ),
+                replaces_divergent: true,
+            });
+        }
+    }
+    plan.steps.extend(extra.into_iter().map(Step::Skill));
+
+    // Copying a directory onto itself does nothing; drop those rather than
+    // showing the user a write that cannot change anything.
+    plan.steps.retain(|step| !matches!(step, Step::Skill(w) if w.dest == source));
+
     plan
+}
+
+/// Whether `dest` already holds a skill whose content differs from `source`.
+///
+/// Compared on the same normalised hash drift detection uses, so the two can
+/// never disagree about whether something has changed.
+fn differs(source: &Path, dest: &Path) -> bool {
+    let read = |dir: &Path| std::fs::read_to_string(dir.join("SKILL.md")).ok();
+    match (read(source), read(dest)) {
+        (Some(a), Some(b)) => crate::skills::hash(&a) != crate::skills::hash(&b),
+        // Nothing there yet, or nothing to compare: not a replacement.
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -503,9 +579,17 @@ pub fn preview(plan: &Plan) -> Result<String> {
             }
             Step::Skill(copy) => {
                 let _ = writeln!(out, "{}", copy.dest.display());
+                if copy.replaces_divergent {
+                    let _ = writeln!(out, "  ! REPLACES an existing copy that differs");
+                }
                 let _ = writeln!(out, "  + copy from {}", copy.source.display());
                 let _ = writeln!(out, "  serves: {}", copy.providers.join(", "));
                 let _ = writeln!(out, "  reason: {}", copy.reason);
+                if copy.replaces_divergent
+                    && let Ok(lines) = step_diff(step)
+                {
+                    out.push_str(&crate::diff::render(&lines));
+                }
                 out.push('\n');
             }
         }
@@ -540,28 +624,36 @@ fn render_change(change: &ConfigWrite, redact: Redact) -> Result<(String, String
     Ok((before, editor.render()))
 }
 
-fn unified_diff(before: &str, after: &str) -> String {
-    use similar::{ChangeTag, TextDiff};
-    let diff = TextDiff::from_lines(before, after);
-    let mut out = String::new();
-    for group in diff.grouped_ops(3) {
-        for op in group {
-            for change in diff.iter_changes(&op) {
-                let sign = match change.tag() {
-                    ChangeTag::Delete => "-",
-                    ChangeTag::Insert => "+",
-                    ChangeTag::Equal => " ",
-                };
-                out.push_str("  ");
-                out.push_str(sign);
-                out.push_str(change.value());
-                if !change.value().ends_with('\n') {
-                    out.push('\n');
-                }
-            }
+/// The diff for one step, as structured lines rather than pre-rendered text.
+///
+/// The CLI renders these with `+`/`-` signs; the GUI colours them. Both call
+/// this, so the two can never show different diffs — which matters, because the
+/// preview is the thing the user is trusting.
+///
+/// Credentials are masked here exactly as they are in [`preview`] (F-7.4).
+pub fn step_diff(step: &Step) -> Result<Vec<DiffLine>> {
+    let (before, after) = match step {
+        Step::Config(change) => render_change(change, Redact::Yes)?,
+        Step::ConfigRemove(removal) => {
+            let before = std::fs::read_to_string(&removal.path).unwrap_or_default();
+            let mut editor = Editor::parse(&before, removal.format)?;
+            editor.remove(&removal.pointer, &removal.entry_name)?;
+            (before.clone(), editor.render())
         }
-    }
-    out
+        // A skill write that replaces an existing copy destroys content, so show
+        // exactly what goes. A write into empty space has nothing to diff.
+        Step::Skill(write) if write.replaces_divergent => {
+            let read =
+                |dir: &Path| std::fs::read_to_string(dir.join("SKILL.md")).unwrap_or_default();
+            (read(&write.dest), read(&write.source))
+        }
+        Step::Skill(_) | Step::SkillRemove(_) => return Ok(Vec::new()),
+    };
+    Ok(crate::diff::lines(&before, &after, 3))
+}
+
+fn unified_diff(before: &str, after: &str) -> String {
+    crate::diff::render(&crate::diff::lines(before, after, 3))
 }
 
 // ---------------------------------------------------------------------------
@@ -581,6 +673,10 @@ pub struct Outcome {
 /// its own result — so the user always learns exactly what was and was not
 /// written.
 pub fn apply(plan: &Plan) -> Vec<Outcome> {
+    apply_with(plan, &write::Options::default())
+}
+
+pub fn apply_with(plan: &Plan, options: &write::Options) -> Vec<Outcome> {
     let mut outcomes = Vec::new();
 
     for step in &plan.steps {
@@ -588,7 +684,7 @@ pub fn apply(plan: &Plan) -> Vec<Outcome> {
             Step::Config(change) => {
                 let result = (|| -> Result<String> {
                     let (_, after) = render_change(change, Redact::No)?;
-                    let report = write::save(&change.path, &after)?;
+                    let report = write::save_with(&change.path, &after, options)?;
                     Ok(if report.changed {
                         match report.backup {
                             Some(b) => format!("written (backup: {})", b.display()),
@@ -611,7 +707,7 @@ pub fn apply(plan: &Plan) -> Vec<Outcome> {
                     if !editor.remove(&removal.pointer, &removal.entry_name)? {
                         return Ok("not present".to_string());
                     }
-                    let report = write::save(&removal.path, &editor.render())?;
+                    let report = write::save_with(&removal.path, &editor.render(), options)?;
                     Ok(match report.backup {
                         Some(b) => format!("removed (backup: {})", b.display()),
                         None => "removed".to_string(),
@@ -684,9 +780,11 @@ mod tests {
 
     #[test]
     fn unified_diff_marks_added_lines() {
+        // Rendering goes through `crate::diff` now, which writes "  + text".
         let d = unified_diff("a\nb\n", "a\nb\nc\n");
-        assert!(d.contains("+c"));
-        assert!(!d.contains("-a"));
+        assert!(d.contains("+ c"), "got:\n{d}");
+        assert!(!d.contains("- a"), "got:\n{d}");
+        assert!(d.contains("  a"), "context should be kept:\n{d}");
     }
 
     #[test]

@@ -253,6 +253,56 @@ fn resolve_pointer(doc: &Value, template: &str) -> Vec<(String, Option<String>)>
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// Comparing copies
+// ---------------------------------------------------------------------------
+
+/// A line-by-line comparison of two copies of the same skill.
+#[derive(Debug)]
+pub struct CopyComparison {
+    pub left: PathBuf,
+    pub right: PathBuf,
+    pub lines: Vec<crate::diff::DiffLine>,
+}
+
+/// Diff the first two readable copies of a skill, so "these differ" can be
+/// followed by *how*.
+///
+/// Compares the whole `SKILL.md`, not just the frontmatter: a change to the body
+/// is every bit as real as a change to the description, and the hashes that
+/// drive drift detection cover the whole file.
+///
+/// Returns `None` when there is nothing to compare — fewer than two readable
+/// copies.
+pub fn compare_copies(group: &SkillGroup) -> Option<CopyComparison> {
+    let readable: Vec<&SkillLocation> =
+        group.locations.iter().filter(|l| l.entry.is_ok()).collect();
+    let left = readable.first()?;
+
+    // Compare against the first copy that actually *differs*, not simply the
+    // next one in path order. With four copies where three agree, taking
+    // "the first two" produces an empty diff and the drift goes unexplained —
+    // which is exactly what happened the first time this shipped.
+    let left_hash = left.entry.skill().map(|s| &s.content_hash);
+    let right = readable
+        .iter()
+        .skip(1)
+        .find(|l| l.entry.skill().map(|s| &s.content_hash) != left_hash)
+        .or_else(|| readable.get(1))?;
+
+    let read = |location: &SkillLocation| {
+        std::fs::read_to_string(location.path.join("SKILL.md")).unwrap_or_default()
+    };
+
+    Some(CopyComparison {
+        left: left.path.clone(),
+        right: right.path.clone(),
+        // Generous context: these files are short, and seeing an edit in its
+        // surroundings is the point.
+        lines: crate::diff::lines(&read(left), &read(right), 4),
+    })
+}
+
 fn classify(locations: &[SkillLocation]) -> DriftStatus {
     if locations.iter().any(|l| !l.entry.is_ok()) {
         return DriftStatus::Problem;

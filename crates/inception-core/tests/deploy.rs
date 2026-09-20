@@ -82,6 +82,18 @@ impl Drop for FakeHome {
     }
 }
 
+/// Apply a plan with backups redirected into the fake home.
+///
+/// Without this, every test that writes a file drops a backup into the *real*
+/// `~/.inception/backups`, where it is indistinguishable from one the user
+/// might actually need.
+fn run(home: &FakeHome, plan: &Plan) -> Vec<inception_core::plan::Outcome> {
+    inception_core::plan::apply_with(
+        plan,
+        &inception_core::write::Options::with_backup_dir(home.path("backups")),
+    )
+}
+
 fn all_targets() -> Vec<String> {
     ["claude-code", "codex", "copilot-cli", "gemini-cli", "opencode"]
         .iter()
@@ -195,7 +207,7 @@ fn applying_a_skill_plan_copies_the_whole_directory() {
     let source = home.make_skill("bundled");
 
     let plan = inception_core::plan::skill_deploy(&providers, &all_targets(), &source, Scope::User);
-    let outcomes = inception_core::plan::apply(&plan);
+    let outcomes = run(&home, &plan);
 
     assert!(outcomes.iter().all(|o| o.result.is_ok()), "{outcomes:#?}");
 
@@ -252,10 +264,11 @@ fn deploying_an_mcp_server_writes_only_the_new_entry() {
 
     // The preview is generated from the real edit, not a description of it.
     let preview = inception_core::plan::preview(&plan).unwrap();
-    assert!(preview.contains("+[mcp_servers.obsidian]"), "preview:\n{preview}");
+    // The shared diff renderer writes "  + text" — sign, then a space.
+    assert!(preview.contains("+ [mcp_servers.obsidian]"), "preview:\n{preview}");
 
     let codex_before = std::fs::read_to_string(home.path(".codex/config.toml")).unwrap();
-    let outcomes = inception_core::plan::apply(&plan);
+    let outcomes = run(&home, &plan);
     assert!(outcomes.iter().all(|o| o.result.is_ok()), "{outcomes:#?}");
 
     // --- Codex: TOML, argv split, env sub-table ---------------------------
@@ -289,7 +302,7 @@ fn deploying_leaves_a_recoverable_backup() {
         Scope::User,
         &LiteralsOnly,
     );
-    let outcomes = inception_core::plan::apply(&plan);
+    let outcomes = run(&home, &plan);
 
     let message = outcomes[0].result.as_ref().unwrap();
     assert!(message.contains("backup"), "got: {message}");
@@ -317,7 +330,7 @@ fn deploying_into_opencode_preserves_its_comments() {
         Scope::User,
         &LiteralsOnly,
     );
-    inception_core::plan::apply(&plan);
+    run(&home, &plan);
 
     let text = std::fs::read_to_string(home.path(".config/opencode/opencode.jsonc")).unwrap();
     assert!(text.contains("// keep me"), "comment lost:\n{text}");
@@ -441,7 +454,7 @@ fn redeploying_preserves_hand_edited_harness_fields() {
         Scope::User,
         &LiteralsOnly,
     );
-    inception_core::plan::apply(&plan);
+    run(&home, &plan);
 
     let text = std::fs::read_to_string(home.path(".codex/config.toml")).unwrap();
     assert!(text.contains("command = \"uvx\""), "not updated:\n{text}");
@@ -468,10 +481,10 @@ fn a_second_identical_deploy_is_a_no_op() {
         )
     };
 
-    inception_core::plan::apply(&make_plan());
+    run(&home, &make_plan());
     let after_first = std::fs::read_to_string(home.path(".codex/config.toml")).unwrap();
 
-    let outcomes = inception_core::plan::apply(&make_plan());
+    let outcomes = run(&home, &make_plan());
     assert_eq!(outcomes[0].result.as_ref().unwrap(), "already up to date");
     assert_eq!(
         std::fs::read_to_string(home.path(".codex/config.toml")).unwrap(),
@@ -538,7 +551,10 @@ fn preview_masks_credentials_but_shows_ordinary_env_vars() {
     let registry = Registry::builtin();
     let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
 
-    let secret_value = "90e6ec080b81c2c7dca3d2371a588e5662e3ea9436fe5b6dda1224110251aaaa";
+    // Fully synthetic. An earlier version of this fixture was derived from a
+    // real key with only the last four characters changed, which would have
+    // committed 60 of its 64 characters to the repository.
+    let secret_value = "not-a-real-key-0000000000000000000000000000000000000000000000000";
     let mut server = obsidian_server();
     server
         .env
@@ -563,7 +579,7 @@ fn preview_masks_credentials_but_shows_ordinary_env_vars() {
     assert!(preview.contains("127.0.0.1"), "preview:\n{preview}");
 
     // ...but the value that actually reaches disk is the real one.
-    inception_core::plan::apply(&plan);
+    run(&home, &plan);
     let written = std::fs::read_to_string(home.path(".codex/config.toml")).unwrap();
     assert!(written.contains(secret_value), "the real value must be written");
     assert!(!written.contains("redacted"));
@@ -596,6 +612,147 @@ fn preview_never_renders_a_secret_value() {
 }
 
 // ---------------------------------------------------------------------------
+// Convergence — a deploy must resolve drift, not add to it
+// ---------------------------------------------------------------------------
+
+/// **Regression test for a bug found by using the app.**
+///
+/// A harness usually reads more than one skill directory. Deploying into the
+/// shared one while a *different* copy sits in that harness's private directory
+/// leaves it seeing two versions of the same skill — strictly worse than the
+/// drift the deploy was meant to fix. The first version of the planner did
+/// exactly that: after "deploy to all", `karpathy-coder` existed in four places
+/// with two different hashes, and the matrix reported everything as drifted.
+#[test]
+fn deploying_overwrites_a_divergent_copy_the_target_also_reads() {
+    let home = FakeHome::new("converge");
+    let registry = Registry::builtin();
+
+    // OpenCode's private directory holds an older, different version.
+    let private = home.path(".config/opencode/skills/karpathy-coder");
+    std::fs::create_dir_all(&private).unwrap();
+    std::fs::write(
+        private.join("SKILL.md"),
+        "---\nname: karpathy-coder\ndescription: The OLD text.\n---\n\nOld body.\n",
+    )
+    .unwrap();
+
+    // The source lives in the shared directory.
+    let source = home.path(".agents/skills/karpathy-coder");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("SKILL.md"),
+        "---\nname: karpathy-coder\ndescription: The NEW text.\n---\n\nNew body.\n",
+    )
+    .unwrap();
+
+    let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
+    let plan =
+        inception_core::plan::skill_deploy(&providers, &all_targets(), &source, Scope::User);
+
+    // The private copy must be in the write set, flagged as a replacement.
+    let replacing = skill_steps(&plan)
+        .into_iter()
+        .find(|w| w.dest == private)
+        .expect("the divergent private copy must be overwritten");
+    assert!(replacing.replaces_divergent);
+    assert!(
+        replacing.reason.contains("shadow"),
+        "the reason should explain why: {}",
+        replacing.reason
+    );
+
+    // Copying the source onto itself is not a write.
+    assert!(
+        !skill_steps(&plan).iter().any(|w| w.dest == source),
+        "should not copy a directory onto itself"
+    );
+
+    // The preview shows what is about to be destroyed.
+    let preview = inception_core::plan::preview(&plan).unwrap();
+    assert!(preview.contains("REPLACES"), "preview:\n{preview}");
+    assert!(preview.contains("- description: The OLD text."), "preview:\n{preview}");
+    assert!(preview.contains("+ description: The NEW text."), "preview:\n{preview}");
+
+    // And after applying, every copy agrees.
+    run(&home, &plan);
+    let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
+    let groups = inception_core::inventory::skills(&providers, Scope::User);
+    let group = groups.iter().find(|g| g.identity == "karpathy-coder").unwrap();
+    assert_eq!(
+        group.distinct_hashes().len(),
+        1,
+        "deploy should converge every copy, found: {:#?}",
+        group.locations.iter().map(|l| &l.path).collect::<Vec<_>>()
+    );
+}
+
+/// A copy that already agrees is left alone — no needless rewrite.
+#[test]
+fn deploying_does_not_rewrite_copies_that_already_match() {
+    let home = FakeHome::new("nochurn");
+    let registry = Registry::builtin();
+
+    let body = "---\nname: same\ndescription: Identical.\n---\n\nBody.\n";
+    for rel in [".config/opencode/skills/same", ".agents/skills/same"] {
+        let dir = home.path(rel);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), body).unwrap();
+    }
+
+    let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
+    let plan = inception_core::plan::skill_deploy(
+        &providers,
+        &all_targets(),
+        &home.path(".agents/skills/same"),
+        Scope::User,
+    );
+
+    assert!(
+        !skill_steps(&plan)
+            .iter()
+            .any(|w| w.dest == home.path(".config/opencode/skills/same")),
+        "an identical copy should not be rewritten"
+    );
+}
+
+/// Drift must be explained by the copies that actually differ, not simply the
+/// first two in path order — with three agreeing copies and one outlier, taking
+/// "the first two" produced an empty diff.
+#[test]
+fn comparison_picks_copies_that_actually_differ() {
+    let home = FakeHome::new("comparepick");
+    let registry = Registry::builtin();
+
+    let same = "---\nname: k\ndescription: Agreed.\n---\n\nBody.\n";
+    for rel in [".agents/skills/k", ".claude/skills/k"] {
+        let dir = home.path(rel);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), same).unwrap();
+    }
+    let odd = home.path(".config/opencode/skills/k");
+    std::fs::create_dir_all(&odd).unwrap();
+    std::fs::write(
+        odd.join("SKILL.md"),
+        "---\nname: k\ndescription: The odd one out.\n---\n\nBody.\n",
+    )
+    .unwrap();
+
+    let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
+    let groups = inception_core::inventory::skills(&providers, Scope::User);
+    let group = groups.iter().find(|g| g.identity == "k").unwrap();
+
+    let comparison = inception_core::inventory::compare_copies(group)
+        .expect("three copies means there is something to compare");
+    assert!(
+        inception_core::diff::has_changes(&comparison.lines),
+        "comparison must land on the copies that differ, got an empty diff between {} and {}",
+        comparison.left.display(),
+        comparison.right.display()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Removal (F-5.7)
 // ---------------------------------------------------------------------------
 
@@ -615,7 +772,7 @@ fn removing_an_mcp_server_is_surgical() {
         inception_core::plan::mcp_remove(&providers, &["codex".to_string()], "drop", Scope::User);
     assert_eq!(plan.steps.len(), 1);
 
-    inception_core::plan::apply(&plan);
+    run(&home, &plan);
     let text = std::fs::read_to_string(home.path(".codex/config.toml")).unwrap();
 
     assert!(!text.contains("drop"));
@@ -652,7 +809,7 @@ fn removing_from_a_shared_directory_names_every_affected_harness() {
         &source,
         Scope::User,
     );
-    inception_core::plan::apply(&plan);
+    run(&home, &plan);
     assert!(home.path(".agents/skills/shared-skill").is_dir());
 
     // Removing it via Codex affects everyone reading ~/.agents/skills.
@@ -672,7 +829,7 @@ fn removing_from_a_shared_directory_names_every_affected_harness() {
     }
     assert!(!preview.contains("claude-code"), "Claude Code does not read it");
 
-    inception_core::plan::apply(&plan);
+    run(&home, &plan);
     assert!(!home.path(".agents/skills/shared-skill").exists());
 }
 
@@ -690,7 +847,7 @@ fn removing_from_a_private_directory_affects_one_harness() {
         &source,
         Scope::User,
     );
-    inception_core::plan::apply(&plan);
+    run(&home, &plan);
 
     let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
     let plan = inception_core::plan::skill_remove(
@@ -722,7 +879,7 @@ fn deploy_then_remove_restores_the_original_config() {
         Scope::User,
         &LiteralsOnly,
     );
-    inception_core::plan::apply(&plan);
+    run(&home, &plan);
 
     let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
     let plan = inception_core::plan::mcp_remove(
@@ -731,7 +888,7 @@ fn deploy_then_remove_restores_the_original_config() {
         "obsidian",
         Scope::User,
     );
-    inception_core::plan::apply(&plan);
+    run(&home, &plan);
 
     let after = std::fs::read_to_string(home.path(".codex/config.toml")).unwrap();
     // Whitespace around a removed table can legitimately differ; content must not.

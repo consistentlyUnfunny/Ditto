@@ -1,2 +1,41 @@
+# --- Rust -------------------------------------------------------------------
 /target
 **/*.rs.bk
+
+# --- Frontend ---------------------------------------------------------------
+# node_modules is ~45 MB and fully described by package-lock.json.
+node_modules/
+# Vite build output. `cargo run -p inception-gui` needs it, so build the
+# frontend first: cd crates/inception-gui/ui && npm run build
+crates/inception-gui/ui/dist/
+.vite/
+*.tsbuildinfo
+
+# --- Tauri ------------------------------------------------------------------
+# Regenerated from tauri.conf.json by tauri-build on every compile.
+crates/inception-gui/gen/schemas/
+# Bundled installers.
+crates/inception-gui/target/
+
+# --- Local state ------------------------------------------------------------
+# Never commit anything read out of a real machine's config: these can contain
+# API keys, absolute home paths and project names.
+*.local.toml
+/scratch/
+/tmp/
+
+# --- Editors and OS ---------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+*.swp
+*~
+
+# --- Deliberately NOT ignored -----------------------------------------------
+# Cargo.lock          — committed; this workspace produces binaries
+# ui/package-lock.json — committed; reproducible npm installs
+# ui/public/fonts/*.woff2 — vendored on purpose so the app works offline
+# crates/inception-gui/icons/ — small, generated once, part of the app's identity
+# crates/inception-core/tests/corpus/ — real configs with secrets scrubbed;
+#                        the round-trip tests are meaningless without them

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/inception-core", "crates/inception-cli"]
+members = ["crates/inception-core", "crates/inception-cli", "crates/inception-gui"]
 
 [workspace.package]
 version = "0.1.0"
