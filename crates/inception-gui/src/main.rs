@@ -72,6 +72,8 @@ fn overview() -> Result<dto::Overview, String> {
                     detail: None,
                     cells,
                     ties: vec![],
+                    deprecated: false,
+                    deprecated_path: None,
                 });
             }
             _ => {}
@@ -93,11 +95,45 @@ fn overview() -> Result<dto::Overview, String> {
 fn detail(name: String) -> Result<dto::DetailView, String> {
     let (registry, ctx, scope) = survey()?;
     let found = inception_core::detect(&registry, &ctx, scope).map_err(|e| e.to_string())?;
-    inception_core::inventory::skills(&found, scope)
+
+    // Skills first, then servers — the same resolution order the deploy path
+    // uses. Before this, a server row opened the drawer onto an error.
+    if let Some(group) = inception_core::inventory::skills(&found, scope)
         .iter()
         .find(|g| g.identity == name)
-        .map(dto::detail)
-        .ok_or_else(|| format!("no skill named '{name}'"))
+    {
+        return Ok(dto::detail(group, &found));
+    }
+
+    inception_core::inventory::mcp_servers(&found, scope)
+        .iter()
+        .find(|l| l.server.name == name)
+        .map(|l| dto::DetailView::Server(Box::new(dto::server_detail(l))))
+        .ok_or_else(|| format!("nothing named '{name}' is installed"))
+}
+
+/// Open the OS file manager at a path (T-5.12).
+///
+/// Arguments are passed as argv, never through a shell, so a path containing
+/// quotes or semicolons cannot turn into a command. This launches the file
+/// manager only — it never executes anything found in a config (NF-4.3).
+#[tauri::command]
+fn reveal(path: String) -> Result<(), String> {
+    let target = std::path::Path::new(&path);
+    if !target.exists() {
+        return Err(format!("{path} no longer exists"));
+    }
+
+    let result = if cfg!(target_os = "windows") {
+        // `/select,` highlights the entry inside its parent.
+        std::process::Command::new("explorer").arg(format!("/select,{path}")).spawn()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg("-R").arg(&path).spawn()
+    } else {
+        let dir = if target.is_dir() { target } else { target.parent().unwrap_or(target) };
+        std::process::Command::new("xdg-open").arg(dir).spawn()
+    };
+    result.map(|_| ()).map_err(|e| format!("could not open the file manager: {e}"))
 }
 
 #[tauri::command]
@@ -116,13 +152,21 @@ fn doctor() -> Result<Vec<dto::FindingView>, String> {
 /// Build a plan without touching disk. The window renders this; nothing is
 /// written until [`apply`] is called with the same arguments (F-5.3).
 #[tauri::command]
-fn plan_deploy(name: String, targets: Vec<String>) -> Result<dto::PlanView, String> {
-    build_plan(&name, &targets).map(|p| dto::plan(&p))
+fn plan_deploy(
+    name: String,
+    targets: Vec<String>,
+    source: Option<String>,
+) -> Result<dto::PlanView, String> {
+    build_plan(&name, &targets, source.as_deref()).map(|p| dto::plan(&p))
 }
 
 #[tauri::command]
-fn apply(name: String, targets: Vec<String>) -> Result<Vec<dto::OutcomeView>, String> {
-    let plan = build_plan(&name, &targets)?;
+fn apply(
+    name: String,
+    targets: Vec<String>,
+    source: Option<String>,
+) -> Result<Vec<dto::OutcomeView>, String> {
+    let plan = build_plan(&name, &targets, source.as_deref())?;
     Ok(inception_core::plan::apply(&plan)
         .into_iter()
         .map(|o| dto::OutcomeView {
@@ -138,19 +182,31 @@ fn apply(name: String, targets: Vec<String>) -> Result<Vec<dto::OutcomeView>, St
 }
 
 /// Shared by preview and apply so the two can never diverge.
-fn build_plan(name: &str, targets: &[String]) -> Result<inception_core::plan::Plan, String> {
+fn build_plan(
+    name: &str,
+    targets: &[String],
+    source: Option<&str>,
+) -> Result<inception_core::plan::Plan, String> {
     let (registry, ctx, scope) = survey()?;
     let found = inception_core::detect(&registry, &ctx, scope).map_err(|e| e.to_string())?;
 
     // Skills first, then MCP servers — the same resolution order as the CLI.
     let groups = inception_core::inventory::skills(&found, scope);
     if let Some(group) = groups.iter().find(|g| g.identity == name) {
-        let source = group
-            .locations
-            .iter()
-            .find(|l| l.entry.is_ok())
-            .map(|l| l.path.clone())
-            .ok_or_else(|| format!("'{name}' has no readable copy to deploy from"))?;
+        // An explicit source is the whole point of the resolve flow: the caller
+        // decides which version wins, rather than path order deciding for them.
+        let source = match source {
+            Some(path) => {
+                let chosen = std::path::PathBuf::from(path);
+                if !group.locations.iter().any(|l| l.path == chosen && l.entry.is_ok()) {
+                    return Err(format!("{path} is not a readable copy of '{name}'"));
+                }
+                chosen
+            }
+            None => inception_core::inventory::default_source(group)
+                .map(|l| l.path.clone())
+                .ok_or_else(|| format!("'{name}' has no readable copy to deploy from"))?,
+        };
         return Ok(inception_core::plan::skill_deploy(&found, targets, &source, scope));
     }
 
@@ -180,7 +236,8 @@ fn main() {
             detail,
             doctor,
             plan_deploy,
-            apply
+            apply,
+            reveal
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the inception window");

@@ -95,7 +95,7 @@ button { font: inherit; }
 .matrix { min-width: 620px; }
 .mrow {
   display: grid;
-  grid-template-columns: minmax(180px, 240px) minmax(280px, 1fr);
+  grid-template-columns: minmax(230px, 300px) minmax(280px, 1fr);
   align-items: center;
   column-gap: 20px;
 }
@@ -119,7 +119,7 @@ button { font: inherit; }
 }
 .arow {
   display: grid;
-  grid-template-columns: minmax(180px, 240px) minmax(280px, 1fr);
+  grid-template-columns: minmax(230px, 300px) minmax(280px, 1fr);
   align-items: center; column-gap: 20px;
   border: 0; background: none; cursor: pointer;
   width: 100%; padding: 0; border-radius: 3px;
@@ -130,9 +130,18 @@ button { font: inherit; }
 
 .rowname {
   font-family: var(--mono); font-size: 12.5px; color: #C5CCD5;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   padding: 8px 0 8px 6px; text-align: left;
+  display: flex; align-items: baseline; gap: 8px; min-width: 0;
 }
+.rowtext { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rowmark {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--caution); flex: none;
+  align-self: center;
+}
+/* Says the row opens, without shouting. */
+.chev { margin-left: auto; color: #4A5462; flex: none; padding-right: 4px; }
+.arow:hover .chev { color: var(--fg-dim); }
 .rowname.dim { color: var(--fg-faint); }
 .cell { display: flex; align-items: center; justify-content: center; padding: 9px 0 14px; }
 
@@ -225,8 +234,6 @@ button { font: inherit; }
 .drawer-body { flex: 1; overflow: auto; padding: 20px 18px 24px; }
 
 /* ---------- paper ---------- */
-.papers { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.papers.one { grid-template-columns: 1fr; }
 .paperwrap { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .paperhead {
   display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
@@ -341,4 +348,86 @@ button { font: inherit; }
 @media (prefers-reduced-motion: no-preference) {
   .arow { transition: background 90ms ease; }
   .btn { transition: background 90ms ease; }
+}
+
+/* ---------- server fields, callouts, copy rows (T-5.10, T-5.12) ---------- */
+.fields { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border-radius: 3px; overflow: hidden; }
+.field { display: grid; grid-template-columns: 150px 1fr; gap: 14px; padding: 9px 13px; background: var(--ground); }
+.flabel { font-size: 12.5px; color: var(--fg-faint); }
+.fvalue { font-size: 12.5px; color: #D3DAE2; word-break: break-word; }
+.fvalue.mono { font-family: var(--mono); font-size: 11.5px; }
+
+.callout {
+  margin-top: 18px; padding: 13px 15px; border-radius: 3px;
+  background: rgba(216,155,44,.08);
+  box-shadow: inset 2px 0 0 var(--caution);
+}
+.callout-title { font-size: 13px; font-weight: 600; color: var(--caution); margin-bottom: 3px; }
+.callout-body { font-size: 12.5px; color: var(--fg-dim); }
+
+.paperhead .who { color: var(--route-soft); }
+.flag.source { color: var(--route-soft); border-color: var(--route-soft); }
+
+.iconbtn {
+  background: none; border: 1px solid var(--rule-strong); color: var(--fg-dim);
+  border-radius: 3px; cursor: pointer; padding: 3px 10px; font-size: 12.5px;
+}
+.iconbtn:hover { color: #fff; border-color: #55606E; }
+
+/* ---------- configure: version and target choices (T-5.17, T-5.18) -------- */
+.choices { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border-radius: 3px; overflow: hidden; }
+.choice {
+  display: grid; grid-template-columns: 20px 1fr; gap: 12px;
+  padding: 11px 13px; background: var(--ground); cursor: pointer;
+  align-items: start;
+}
+.choice:hover { background: #262E38; }
+.choice input { margin: 2px 0 0; accent-color: var(--route); cursor: pointer; }
+.choice-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.choice-top { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; font-size: 13px; color: #D3DAE2; }
+.choice-top .hash { font-family: var(--mono); font-size: 11.5px; color: var(--route-soft); text-align: left; }
+.choice-top .who { font-size: 12.5px; color: var(--fg-dim); }
+.choice-top .muted { font-size: 12px; color: var(--fg-faint); }
+.choice-desc { font-size: 12.5px; color: var(--fg-dim); }
+.choice-path { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); word-break: break-all; }
+
+.summary {
+  margin-top: 16px; padding: 11px 13px; border-radius: 3px;
+  background: rgba(108,75,246,.10);
+  box-shadow: inset 2px 0 0 var(--route);
+  font-size: 12.5px; color: #D3DAE2;
+}
+
+/* Outcome of a target, relative to the chosen version. */
+.choice-top .muted.change { color: var(--caution); }
+.choice-top .muted.add { color: var(--route-soft); }
+.summary { white-space: pre-line; }
+
+/* ---------- comparison: two versions, neither is "before" (T-5.19) -------- */
+.cmp { display: flex; flex-direction: column; gap: 9px; }
+.cmp-key { display: flex; flex-direction: column; gap: 4px; }
+.cmp-key-row {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline;
+  font-size: 12.5px;
+}
+.cmp-mark { font-family: var(--mono); color: var(--fg-dim); width: 12px; }
+.cmp-key-row .hash { font-family: var(--mono); font-size: 11.5px; color: #C5CCD5; text-align: left; }
+.cmp-key-row .who { color: var(--fg-dim); }
+.cmp-path { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); word-break: break-all; }
+
+/*
+  Achromatic on purpose. Violet means routing, amber means caution; a
+  comparison is neither, so it must not borrow either. The markers and the key
+  carry the identity, the tints only group the lines.
+*/
+.cmp-line { white-space: pre; padding: 0 14px; }
+.cmp-line.same { color: #56616F; }
+.cmp-line.a { background: rgba(23,28,34,.07); color: var(--ink); box-shadow: inset 2px 0 0 #8A93A0; }
+.cmp-line.b { background: rgba(23,28,34,.16); color: var(--ink); box-shadow: inset 2px 0 0 #39424F; }
+
+/* ---------- doctor actions, drawer back (T-5.24, T-5.25) ----------------- */
+.finding-actions { display: flex; gap: 8px; margin-top: 9px; }
+.finding-actions .btn { padding: 4px 11px; font-size: 12.5px; }
+.close.back {
+  font-size: 16px; line-height: 1; padding: 1px 9px 3px;
 }

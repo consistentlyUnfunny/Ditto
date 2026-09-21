@@ -747,9 +747,132 @@ fn comparison_picks_copies_that_actually_differ() {
     assert!(
         inception_core::diff::has_changes(&comparison.lines),
         "comparison must land on the copies that differ, got an empty diff between {} and {}",
-        comparison.left.display(),
-        comparison.right.display()
+        comparison.left.path.display(),
+        comparison.right.path.display()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Source selection (T-5.14, T-5.15)
+// ---------------------------------------------------------------------------
+
+/// Builds the shape the dev machine actually has: OpenCode reads both the shared
+/// directory and its own, and the two disagree.
+fn home_with_two_versions(tag: &str) -> (FakeHome, Registry) {
+    let home = FakeHome::new(tag);
+    for (rel, description) in [
+        (".agents/skills/k", "The shared version."),
+        (".config/opencode/skills/k", "OpenCode's own version."),
+    ] {
+        let dir = home.path(rel);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: k\ndescription: {description}\n---\n\nBody.\n"),
+        )
+        .unwrap();
+    }
+    (home, Registry::builtin())
+}
+
+fn group_named<'a>(
+    groups: &'a [inception_core::inventory::SkillGroup],
+    name: &str,
+) -> &'a inception_core::inventory::SkillGroup {
+    groups.iter().find(|g| g.identity == name).expect("group")
+}
+
+/// **"OpenCode's version" must mean OpenCode's own copy.**
+///
+/// OpenCode reads `~/.agents/skills` as well as its own directory, and the
+/// shared one sorts first — so a naive "first location serving this provider"
+/// returned the shared copy, the opposite of what `--from opencode` means.
+#[test]
+fn source_for_prefers_a_providers_own_directory_over_a_shared_one() {
+    let (home, registry) = home_with_two_versions("sourcepick");
+    let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
+    let groups = inception_core::inventory::skills(&providers, Scope::User);
+    let group = group_named(&groups, "k");
+
+    let chosen = inception_core::inventory::source_for(group, "opencode").unwrap();
+    assert_eq!(chosen.path, home.path(".config/opencode/skills/k"));
+
+    // Gemini has no private copy, so the shared one is genuinely its version.
+    let gemini = inception_core::inventory::source_for(group, "gemini-cli").unwrap();
+    assert_eq!(gemini.path, home.path(".agents/skills/k"));
+}
+
+/// A deprecated directory is a last resort, never the preferred source.
+#[test]
+fn source_for_avoids_deprecated_locations() {
+    let home = FakeHome::new("sourcedep");
+    for rel in [".codex/skills/k", ".agents/skills/k"] {
+        let dir = home.path(rel);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "---\nname: k\ndescription: d.\n---\n\nB.\n").unwrap();
+    }
+    let registry = Registry::builtin();
+    let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
+    let groups = inception_core::inventory::skills(&providers, Scope::User);
+
+    let chosen =
+        inception_core::inventory::source_for(group_named(&groups, "k"), "codex").unwrap();
+    assert_eq!(
+        chosen.path,
+        home.path(".agents/skills/k"),
+        "codex's only private directory is deprecated, so the shared one wins"
+    );
+}
+
+/// Choosing a source changes which version survives — the whole point.
+#[test]
+fn choosing_the_source_decides_which_version_wins() {
+    let (home, registry) = home_with_two_versions("sourcewins");
+    let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
+    let groups = inception_core::inventory::skills(&providers, Scope::User);
+    let group = group_named(&groups, "k");
+    assert_eq!(inception_core::inventory::versions(group).len(), 2);
+
+    let source = inception_core::inventory::source_for(group, "opencode").unwrap();
+    let plan =
+        inception_core::plan::skill_deploy(&providers, &all_targets(), &source.path, Scope::User);
+    run(&home, &plan);
+
+    // Every copy now holds OpenCode's text.
+    for rel in [".agents/skills/k", ".config/opencode/skills/k", ".claude/skills/k"] {
+        let text = std::fs::read_to_string(home.path(rel).join("SKILL.md")).unwrap();
+        assert!(
+            text.contains("OpenCode's own version."),
+            "{rel} did not take the chosen version:\n{text}"
+        );
+    }
+
+    let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
+    let groups = inception_core::inventory::skills(&providers, Scope::User);
+    assert_eq!(inception_core::inventory::versions(group_named(&groups, "k")).len(), 1);
+}
+
+/// Versions group by content, not by location: 2 copies of one text and 1 of
+/// another is a two-way choice, not a three-way one.
+#[test]
+fn versions_group_by_content() {
+    let (home, registry) = home_with_two_versions("versions");
+    // A third copy agreeing with the shared one.
+    let extra = home.path(".claude/skills/k");
+    std::fs::create_dir_all(&extra).unwrap();
+    std::fs::write(
+        extra.join("SKILL.md"),
+        "---\nname: k\ndescription: The shared version.\n---\n\nBody.\n",
+    )
+    .unwrap();
+
+    let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
+    let groups = inception_core::inventory::skills(&providers, Scope::User);
+    let versions = inception_core::inventory::versions(group_named(&groups, "k"));
+
+    assert_eq!(versions.len(), 2, "three copies, two versions");
+    let biggest = versions.iter().map(|v| v.len()).max().unwrap();
+    assert_eq!(biggest, 2);
 }
 
 // ---------------------------------------------------------------------------

@@ -20,6 +20,8 @@ type Row = {
   detail: string | null;
   cells: Cell[];
   ties: Tie[];
+  deprecated: boolean;
+  deprecated_path: string | null;
 };
 type Overview = { scope: string; providers: Provider[]; skills: Row[]; servers: Row[] };
 
@@ -27,13 +29,44 @@ type Copy = {
   path: string; providers: string[]; description: string; body: string;
   hash: string; deprecated: boolean; readable: boolean;
 };
-type Comparison = { left: string; right: string; lines: DiffLine[] };
-type Detail = {
+type Side = { path: string; providers: string[]; hash: string };
+type Comparison = { left: Side; right: Side; lines: DiffLine[] };
+type Version = {
+  hash: string;
+  description: string;
+  providers: string[];
+  paths: string[];
+  source: string;
+  is_default: boolean;
+};
+type Target = { id: string; name: string; has_it: boolean };
+type SkillDetail = {
+  kind: "skill";
   name: string;
   status: string;
   copies: Copy[];
   comparison: Comparison | null;
+  source: string | null;
+  version_count: number;
+  unusable: boolean;
+  versions: Version[];
+  targets: Target[];
 };
+type ServerDetail = {
+  kind: "server";
+  name: string;
+  provider: string;
+  transport: string;
+  command: string;
+  url: string | null;
+  env_names: string[];
+  secret_names: string[];
+  extra_keys: string[];
+  file: string;
+  scope: string;
+  project: string | null;
+};
+type Detail = SkillDetail | ServerDetail;
 
 type DiffLine = { kind: "add" | "del" | "ctx"; text: string };
 type Step = {
@@ -84,6 +117,7 @@ const drawer = document.getElementById("drawer") as HTMLElement;
 const scrim = document.getElementById("scrim") as HTMLElement;
 const scopeLabel = document.getElementById("scope") as HTMLElement;
 const tabs = document.getElementById("tabs") as HTMLElement;
+const refreshButton = document.getElementById("refresh") as HTMLButtonElement;
 
 let current: Overview | null = null;
 
@@ -108,7 +142,21 @@ function renderRow(row: Row, providers: Provider[], onOpen: (name: string) => vo
   button.type = "button";
   button.addEventListener("click", () => onOpen(row.name));
 
-  const label = el("span", row.status === "problem" ? "rowname dim" : "rowname", row.name);
+  const label = el("span", row.status === "problem" ? "rowname dim" : "rowname");
+  label.appendChild(el("span", "rowtext", row.name));
+  // The CLI has always printed "!! deprecated path"; the window hid it, which
+  // made the most actionable finding on a machine invisible here.
+  if (row.deprecated) {
+    // A compact mark, not a pill. On this machine six of seven skills sit in a
+    // deprecated location, and six repeated badges crowded out the names — the
+    // thing the column is actually for. `doctor` states it once, in words.
+    const flag = el("span", "rowmark");
+    flag.title = `in a deprecated location
+${row.deprecated_path ?? ""}`;
+    label.appendChild(flag);
+  }
+  // Something to say the row is openable, rather than relying on the cursor.
+  label.appendChild(el("span", "chev", "›"));
   label.title = row.name;
   button.appendChild(label);
 
@@ -202,7 +250,7 @@ function renderOverview(data: Overview) {
   matrix.appendChild(head);
   matrix.appendChild(el("div", "rule"));
 
-  const open = (name: string) => void openDetail(name);
+  const open = (name: string) => navigate(() => openDetail(name));
 
   const sections: [string, Row[]][] = [
     ["Skills", data.skills],
@@ -229,6 +277,7 @@ function renderOverview(data: Overview) {
   legend.appendChild(item(el("span", "bar shared"), "one shared file"));
   legend.appendChild(item(el("span", "bar"), "separate copies, identical"));
   legend.appendChild(item(el("span", "bar drift"), "copies have drifted"));
+  legend.appendChild(item(el("span", "rowmark"), "in a deprecated location"));
   matrix.appendChild(legend);
 
   main.appendChild(matrix);
@@ -241,13 +290,35 @@ function renderOverview(data: Overview) {
 function closeDrawer() {
   drawer.hidden = true;
   scrim.hidden = true;
+  screens.length = 0;
   clear(drawer);
 }
 
 scrim.addEventListener("click", closeDrawer);
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !drawer.hidden) closeDrawer();
+  if (event.key === "Escape" && !drawer.hidden) goBack();
 });
+
+/**
+ * Screens the drawer has shown, newest last. Named `screens` rather than
+ * `history` because that identifier is already the browser's.
+ *
+ * Each entry re-renders its screen, so Back steps out of a flow instead of
+ * re-fetching the detail view and losing where the user had got to.
+ */
+const screens: Array<() => void | Promise<void>> = [];
+
+function navigate(render: () => void | Promise<void>) {
+  screens.push(render);
+  void render();
+}
+
+function goBack() {
+  screens.pop();
+  const previous = screens[screens.length - 1];
+  if (previous) void previous();
+  else closeDrawer();
+}
 
 function drawerShell(name: string, status: string): HTMLElement {
   clear(drawer);
@@ -255,6 +326,13 @@ function drawerShell(name: string, status: string): HTMLElement {
   scrim.hidden = false;
 
   const head = el("div", "drawer-head");
+  if (screens.length > 1) {
+    const back = el("button", "close back", "‹");
+    back.type = "button";
+    back.title = "Back";
+    back.addEventListener("click", goBack);
+    head.appendChild(back);
+  }
   head.appendChild(el("span", "name", name));
   head.appendChild(el("span", `status${status === "drifted" ? " drifted" : ""}`, status));
   head.appendChild(el("span", "spacer"));
@@ -270,104 +348,397 @@ function drawerShell(name: string, status: string): HTMLElement {
   return body;
 }
 
-/** Highlight the span where two descriptions diverge, rather than the whole line. */
-function diffSpans(a: string, b: string): [string, string, string] {
-  let head = 0;
-  while (head < a.length && head < b.length && a[head] === b[head]) head += 1;
-  let tail = 0;
-  while (
-    tail < a.length - head &&
-    tail < b.length - head &&
-    a[a.length - 1 - tail] === b[b.length - 1 - tail]
-  ) {
-    tail += 1;
-  }
-  return [a.slice(0, head), a.slice(head, a.length - tail), a.slice(a.length - tail)];
-}
 
-function renderPaper(copy: Copy, other: Copy | undefined): HTMLElement {
-  const wrap = el("div", "paperwrap");
-
-  const head = el("div", "paperhead");
-  head.appendChild(el("span", undefined, copy.path));
-  if (copy.deprecated) head.appendChild(el("span", "flag", "deprecated location"));
-  if (!copy.readable) head.appendChild(el("span", "flag", "unreadable"));
-  wrap.appendChild(head);
-
-  const paper = el("div", "paper");
-  paper.appendChild(el("span", "key", "description: "));
-
-  if (other && other.description && other.description !== copy.description) {
-    const [before, middle, after] = diffSpans(copy.description, other.description);
-    paper.appendChild(document.createTextNode(before));
-    paper.appendChild(el("span", "differ", middle));
-    paper.appendChild(document.createTextNode(after));
-  } else {
-    paper.appendChild(document.createTextNode(copy.description || "(none)"));
-  }
-
-  paper.appendChild(document.createTextNode("\n\n" + copy.body));
-  wrap.appendChild(paper);
-  wrap.appendChild(el("div", "hash", copy.hash));
-  return wrap;
-}
 
 async function openDetail(name: string) {
   const body = drawerShell(name, "reading…");
   try {
     const detail = await invoke<Detail>("detail", { name });
     clear(body);
-    (drawer.querySelector(".status") as HTMLElement).textContent =
-      detail.copies.length === 1
-        ? "1 copy"
-        : `${detail.copies.length} copies · ${detail.status}`;
-    (drawer.querySelector(".status") as HTMLElement).className =
-      `status${detail.status === "drifted" ? " drifted" : ""}`;
-
-    const papers = el("div", `papers${detail.copies.length === 1 ? " one" : ""}`);
-    detail.copies.forEach((copy, index) => {
-      const other = detail.copies.length === 2 ? detail.copies[1 - index] : undefined;
-      papers.appendChild(renderPaper(copy, other));
-    });
-    body.appendChild(papers);
-
-    if (detail.comparison) {
-      body.appendChild(el("div", "sectiontitle", "What differs"));
-      const head = el("div", "paperhead");
-      head.appendChild(el("span", undefined, `- ${detail.comparison.left}`));
-      body.appendChild(head);
-      const head2 = el("div", "paperhead");
-      head2.appendChild(el("span", undefined, `+ ${detail.comparison.right}`));
-      body.appendChild(head2);
-      body.appendChild(renderDiff(detail.comparison.lines));
+    if (detail.kind === "server") {
+      renderServer(body, detail);
+    } else {
+      renderSkill(body, detail);
     }
-
-    const actions = el("div", "actions");
-    actions.appendChild(
-      el("span", "count", "Copies this skill to every harness that doesn't have it."),
-    );
-    const deploy = el("button", "btn primary", "Plan a deploy");
-    deploy.type = "button";
-    deploy.addEventListener("click", () => void openPlan(name));
-    actions.appendChild(deploy);
-    body.appendChild(actions);
   } catch (error) {
     clear(body);
     body.appendChild(el("pre", "error", String(error)));
   }
 }
 
+function setStatus(text: string, warn = false) {
+  const node = drawer.querySelector(".status") as HTMLElement;
+  node.textContent = text;
+  node.className = warn ? "status drifted" : "status";
+}
+
+/** A labelled value row, used by the server view. */
+function field(label: string, value: string, mono = true): HTMLElement {
+  const row = el("div", "field");
+  row.appendChild(el("span", "flabel", label));
+  row.appendChild(el("span", mono ? "fvalue mono" : "fvalue", value));
+  return row;
+}
+
+function revealButton(path: string): HTMLElement {
+  const btn = el("button", "btn", "Show in folder");
+  btn.type = "button";
+  btn.addEventListener("click", () => {
+    void invoke("reveal", { path }).catch((e) => {
+      btn.textContent = String(e).slice(0, 44);
+    });
+  });
+  return btn;
+}
+
+function callout(title: string, message: string): HTMLElement {
+  const box = el("div", "callout");
+  box.appendChild(el("div", "callout-title", title));
+  box.appendChild(el("div", "callout-body", message));
+  return box;
+}
+
+function renderServer(body: HTMLElement, server: ServerDetail) {
+  setStatus(server.transport + " · " + server.provider);
+
+  const fields = el("div", "fields");
+  if (server.command) fields.appendChild(field("command", server.command));
+  if (server.url) fields.appendChild(field("url", server.url));
+  fields.appendChild(
+    field("scope", server.project ? server.scope + " · " + server.project : server.scope, false),
+  );
+  fields.appendChild(field("file", server.file));
+  if (server.env_names.length) {
+    fields.appendChild(field("environment", server.env_names.join(", ")));
+  }
+  if (server.extra_keys.length) {
+    fields.appendChild(field("kept for this harness", server.extra_keys.join(", ")));
+  }
+  body.appendChild(fields);
+
+  if (server.secret_names.length) {
+    body.appendChild(
+      callout(
+        "Stores a credential in plaintext",
+        server.secret_names.join(", ") +
+          " is written in the clear in this file. Copying this server to another harness" +
+          " puts another copy on disk.",
+      ),
+    );
+  }
+
+  const actions = el("div", "actions");
+  actions.appendChild(
+    el("span", "count", "Copies this server to harnesses that do not have it."),
+  );
+  actions.appendChild(revealButton(server.file));
+  const go = el("button", "btn primary", "Preview changes…");
+  go.type = "button";
+  go.addEventListener("click", () => navigate(() => openPlan(server.name)));
+  actions.appendChild(go);
+  body.appendChild(actions);
+}
+
+function renderSkill(body: HTMLElement, detail: SkillDetail) {
+  const copies = detail.copies.length;
+  setStatus(
+    detail.version_count > 1
+      ? copies + " copies · " + detail.version_count + " versions"
+      : copies === 1
+        ? "1 copy"
+        : copies + " copies · all the same",
+    detail.version_count > 1,
+  );
+
+  // A directory with no readable SKILL.md is not something to deploy, it is
+  // something to look at. Offering a deploy button here was a dead end.
+  if (detail.unusable) {
+    body.appendChild(
+      callout(
+        "No harness can load this",
+        "The directory exists but has no readable SKILL.md, so every harness ignores it." +
+          " Either add a SKILL.md or delete the directory.",
+      ),
+    );
+    for (const copy of detail.copies) {
+      const row = el("div", "paperhead");
+      row.appendChild(el("span", undefined, copy.path));
+      if (copy.deprecated) row.appendChild(el("span", "flag", "deprecated location"));
+      body.appendChild(row);
+    }
+    const actions = el("div", "actions");
+    actions.appendChild(el("span", "count", ""));
+    if (detail.copies[0]) actions.appendChild(revealButton(detail.copies[0].path));
+    body.appendChild(actions);
+    return;
+  }
+
+  if (detail.comparison) {
+    body.appendChild(el("div", "sectiontitle", "How the versions differ"));
+    body.appendChild(renderComparison(detail.comparison));
+  }
+
+  body.appendChild(el("div", "sectiontitle", copies === 1 ? "Installed at" : "Copies"));
+  for (const copy of detail.copies) {
+    const row = el("div", "paperhead");
+    row.appendChild(el("span", undefined, copy.path));
+    row.appendChild(el("span", "who", copy.providers.join(", ")));
+    row.appendChild(el("span", "hash", copy.hash));
+    if (copy.deprecated) row.appendChild(el("span", "flag", "deprecated location"));
+    if (copy.path === detail.source && detail.version_count > 1) {
+      row.appendChild(el("span", "flag source", "this version wins"));
+    }
+    body.appendChild(row);
+  }
+
+  const missing = detail.targets.filter((t) => !t.has_it).length;
+  const drifted = detail.version_count > 1;
+
+  const actions = el("div", "actions");
+  actions.appendChild(
+    el(
+      "span",
+      "count",
+      drifted
+        ? "Pick which version every copy should match."
+        : missing === 0
+          ? "Every harness already has this."
+          : "Choose where to install it.",
+    ),
+  );
+  if (detail.source) actions.appendChild(revealButton(detail.source));
+
+  // The label names the intent and says how much it touches, so the button is
+  // predictable before it is pressed.
+  if (drifted || missing > 0) {
+    const label = drifted
+      ? "Resolve differences…"
+      : `Add to ${missing} harness${missing === 1 ? "" : "es"}…`;
+    const go = el("button", "btn primary", label);
+    go.type = "button";
+    go.addEventListener("click", () => navigate(() => openConfigure(detail)));
+    actions.appendChild(go);
+  }
+  body.appendChild(actions);
+}
+
+// ---------------------------------------------------------------------------
+// Configure — choose the version, choose the targets (T-5.17, T-5.18)
+// ---------------------------------------------------------------------------
+
+/**
+ * One screen for both jobs. The version picker only appears when copies
+ * actually disagree, so an install never asks a question it does not need to.
+ *
+ * The write summary is produced by re-planning on every change rather than by
+ * reimplementing the planner here — so the count the user sees is the count the
+ * engine will perform.
+ */
+async function openConfigure(detail: SkillDetail) {
+  const drifted = detail.version_count > 1;
+  const body = drawerShell(detail.name, drifted ? "choose a version" : "choose targets");
+
+  let source: string | undefined = detail.versions.find((v) => v.is_default)?.source;
+  // Resolving touches everything that has a copy; installing targets the gaps.
+  const selected = new Set(
+    detail.targets.filter((t) => (drifted ? true : !t.has_it)).map((t) => t.id),
+  );
+
+  if (drifted) {
+    body.appendChild(el("div", "sectiontitle", "Which version should win?"));
+    const list = el("div", "choices");
+    for (const version of detail.versions) {
+      const row = el("label", "choice");
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "version";
+      radio.value = version.source;
+      radio.checked = version.source === source;
+      radio.addEventListener("change", () => {
+        source = version.source;
+        updateNotes();
+        void recount();
+      });
+      row.appendChild(radio);
+
+      const text = el("div", "choice-body");
+      const top = el("div", "choice-top");
+      top.appendChild(el("span", "hash", version.hash));
+      top.appendChild(el("span", "who", version.providers.join(", ")));
+      top.appendChild(
+        el("span", "muted", `${version.paths.length} cop${version.paths.length === 1 ? "y" : "ies"}`),
+      );
+      text.appendChild(top);
+      text.appendChild(el("div", "choice-desc", version.description || "(no description)"));
+      text.appendChild(el("div", "choice-path", version.source));
+      row.appendChild(text);
+      list.appendChild(row);
+    }
+    body.appendChild(list);
+  }
+
+  body.appendChild(el("div", "sectiontitle", drifted ? "Apply to" : "Install on"));
+  const targets = el("div", "choices");
+  const notes = new Map<string, HTMLElement>();
+  for (const target of detail.targets) {
+    const row = el("label", "choice");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = selected.has(target.id);
+    box.addEventListener("change", () => {
+      if (box.checked) selected.add(target.id);
+      else selected.delete(target.id);
+      void recount();
+    });
+    row.appendChild(box);
+    const text = el("div", "choice-body");
+    const top = el("div", "choice-top");
+    top.appendChild(el("span", undefined, target.name));
+    const note = el("span", "muted");
+    top.appendChild(note);
+    notes.set(target.id, note);
+    text.appendChild(top);
+    row.appendChild(text);
+    targets.appendChild(row);
+  }
+  body.appendChild(targets);
+
+  /**
+   * Say what happens to each harness *given the chosen version*, not merely
+   * whether it has some copy.
+   *
+   * "already has it" was true of every harness in a resolve flow — which is
+   * exactly why they disagreed — so it read as "nothing to do" beside a button
+   * about to rewrite three of them.
+   */
+  function updateNotes() {
+    const winner = detail.versions.find((v) => v.source === source);
+    for (const target of detail.targets) {
+      const note = notes.get(target.id);
+      if (!note) continue;
+      const matches = winner ? winner.providers.includes(target.id) : false;
+      if (matches) {
+        note.textContent = "already matches";
+        note.className = "muted";
+      } else if (target.has_it) {
+        note.textContent = "will be replaced";
+        note.className = "muted change";
+      } else {
+        note.textContent = "will be added";
+        note.className = "muted add";
+      }
+    }
+  }
+
+  const summary = el("div", "summary", "…");
+  body.appendChild(summary);
+
+  const actions = el("div", "actions");
+  actions.appendChild(el("span", "count", ""));
+  const cancel = el("button", "btn", "Back");
+  cancel.type = "button";
+  cancel.addEventListener("click", goBack);
+  const go = el("button", "btn primary", "Preview changes…");
+  go.type = "button";
+  go.addEventListener("click", () =>
+    navigate(() => openPlan(detail.name, [...selected], source)),
+  );
+  actions.appendChild(cancel);
+  actions.appendChild(go);
+  body.appendChild(actions);
+
+  /** Ask the engine what this selection costs, and say it in plain terms. */
+  async function recount() {
+    if (selected.size === 0) {
+      summary.textContent = "Nothing selected.";
+      go.disabled = true;
+      return;
+    }
+    go.disabled = false;
+    summary.textContent = "…";
+    try {
+      const plan = await invoke<PlanView>("plan_deploy", {
+        name: detail.name,
+        targets: [...selected],
+        source,
+      });
+      const writes = plan.steps.length;
+      const replacing = plan.steps.filter((s) => s.warnings.length > 0).length;
+      if (writes === 0) {
+        summary.textContent = "Nothing to do — every harness you picked already matches.";
+      } else {
+        const served = plan.served.length;
+        // Ticked harnesses that need no write already agree with the chosen
+        // version. Saying so stops the count looking like it lost some.
+        const untouched = selected.size - served;
+        const parts = [`${writes} write${writes === 1 ? "" : "s"}`];
+        parts.push(`${served} harness${served === 1 ? "" : "es"} change`);
+        if (untouched > 0) parts.push(`${untouched} already match`);
+        let text = parts.join(" · ");
+        // The shared-directory saving, stated at the moment it is earned.
+        if (writes < served) text += " — one file is shared";
+        if (replacing > 0) {
+          text += `\n${replacing} of these replaces a copy that differs. Backups go to ~/.inception/backups.`;
+        }
+        summary.textContent = text;
+      }
+    } catch (error) {
+      summary.textContent = String(error);
+    }
+  }
+
+  updateNotes();
+  void recount();
+}
+
 // ---------------------------------------------------------------------------
 // Deploy
 // ---------------------------------------------------------------------------
 
-function renderDiff(lines: DiffLine[]): HTMLElement {
+/**
+ * A *change*: something will be written. `+` and `-` are right here, because
+ * there genuinely is a before and an after.
+ */
+function renderChange(lines: DiffLine[]): HTMLElement {
   const diff = el("div", "diff");
   for (const line of lines) {
     const sign = line.kind === "add" ? "+ " : line.kind === "del" ? "- " : "  ";
     diff.appendChild(el("div", line.kind, sign + line.text));
   }
   return diff;
+}
+
+/**
+ * A *comparison*: two versions that both exist. Nothing is being changed by
+ * looking at them, so `+`/`-` would be a lie — a `-` line reads as "about to be
+ * deleted" when it is simply what one harness has today.
+ *
+ * Markers name the side instead, the header says whose each one is, and the
+ * tints are achromatic so neither reads as the bad one. Violet and amber stay
+ * reserved for routing and caution.
+ */
+function renderComparison(comparison: Comparison): HTMLElement {
+  const wrap = el("div", "cmp");
+
+  const key = el("div", "cmp-key");
+  for (const [mark, side] of [["◀", comparison.left], ["▶", comparison.right]] as const) {
+    const row = el("div", "cmp-key-row");
+    row.appendChild(el("span", "cmp-mark", mark));
+    row.appendChild(el("span", "hash", side.hash));
+    row.appendChild(el("span", "who", side.providers.join(", ")));
+    row.appendChild(el("span", "cmp-path", side.path));
+    key.appendChild(row);
+  }
+  wrap.appendChild(key);
+
+  const body = el("div", "diff cmp-body");
+  for (const line of comparison.lines) {
+    const side = line.kind === "del" ? "a" : line.kind === "add" ? "b" : "same";
+    const mark = side === "a" ? "◀ " : side === "b" ? "▶ " : "  ";
+    body.appendChild(el("div", "cmp-line " + side, mark + line.text));
+  }
+  wrap.appendChild(body);
+  return wrap;
 }
 
 function renderStep(step: Step): HTMLElement {
@@ -397,25 +768,24 @@ function renderStep(step: Step): HTMLElement {
   }
   for (const warning of step.warnings) body.appendChild(el("div", "note", warning));
 
-  if (step.diff.length) body.appendChild(renderDiff(step.diff));
+  if (step.diff.length) body.appendChild(renderChange(step.diff));
 
   wrap.appendChild(body);
   return wrap;
 }
 
-async function openPlan(name: string) {
-  const targets = (current?.providers ?? []).map((p) => p.id);
-  const body = drawerShell(`deploy ${name}`, "planning…");
+async function openPlan(name: string, chosen?: string[], source?: string) {
+  const targets = chosen ?? (current?.providers ?? []).map((p) => p.id);
+  const body = drawerShell(name, "planning…");
 
   try {
-    const plan = await invoke<PlanView>("plan_deploy", { name, targets });
+    const plan = await invoke<PlanView>("plan_deploy", { name, targets, source });
     clear(body);
-    const status = drawer.querySelector(".status") as HTMLElement;
-    status.className = "status";
-    status.textContent =
+    setStatus(
       plan.steps.length === 0
         ? "nothing to do"
-        : `${plan.steps.length} write${plan.steps.length === 1 ? "" : "s"} · ${plan.served.length} served`;
+        : `${plan.steps.length} write${plan.steps.length === 1 ? "" : "s"} · ${plan.served.length} served`,
+    );
 
     if (plan.steps.length === 0 && plan.refusals.length === 0) {
       body.appendChild(el("p", "empty", `${name} is already everywhere it can go.`));
@@ -448,9 +818,9 @@ async function openPlan(name: string) {
     actions.appendChild(
       el("span", "count", "Backups go to ~/.inception/backups before anything is replaced."),
     );
-    const cancel = el("button", "btn", "Cancel");
+    const cancel = el("button", "btn", "Back");
     cancel.type = "button";
-    cancel.addEventListener("click", () => void openDetail(name));
+    cancel.addEventListener("click", goBack);
     const go = el("button", "btn primary",
       `Write ${plan.steps.length} file${plan.steps.length === 1 ? "" : "s"}`);
     go.type = "button";
@@ -458,7 +828,7 @@ async function openPlan(name: string) {
       go.disabled = true;
       cancel.disabled = true;
       go.textContent = "Writing…";
-      void runPlan(name, targets);
+      void runPlan(name, targets, source);
     });
     actions.appendChild(cancel);
     actions.appendChild(go);
@@ -469,13 +839,12 @@ async function openPlan(name: string) {
   }
 }
 
-async function runPlan(name: string, targets: string[]) {
+async function runPlan(name: string, targets: string[], source?: string) {
   try {
-    const outcomes = await invoke<Outcome[]>("apply", { name, targets });
-    const body = drawerShell(`deploy ${name}`, "done");
+    const outcomes = await invoke<Outcome[]>("apply", { name, targets, source });
+    const body = drawerShell(name, "done");
     const failed = outcomes.filter((o) => !o.ok).length;
-    (drawer.querySelector(".status") as HTMLElement).textContent =
-      failed === 0 ? `${outcomes.length} written` : `${failed} failed`;
+    setStatus(failed === 0 ? `${outcomes.length} written` : `${failed} failed`, failed > 0);
 
     body.appendChild(el("div", "sectiontitle", "Result"));
     for (const outcome of outcomes) {
@@ -494,12 +863,16 @@ async function runPlan(name: string, targets: string[]) {
     done.type = "button";
     done.addEventListener("click", () => {
       closeDrawer();
-      void refresh();
+      // The machine changes underneath us — another window, a harness updating
+// itself, our own writes. Nothing here polls, so offer an explicit re-read.
+refreshButton.addEventListener("click", () => void refresh());
+
+void refresh();
     });
     actions.appendChild(done);
     body.appendChild(actions);
   } catch (error) {
-    const body = drawerShell(`deploy ${name}`, "failed");
+    const body = drawerShell(name, "failed");
     body.appendChild(el("pre", "error", String(error)));
   }
 }
@@ -508,11 +881,15 @@ async function runPlan(name: string, targets: string[]) {
 // Doctor
 // ---------------------------------------------------------------------------
 
+type FindingAction =
+  | { kind: "open"; name: string }
+  | { kind: "reveal"; path: string };
 type Finding = {
   severity: "security" | "warning" | "info";
   provider: string | null;
   message: string;
   suggestion: string | null;
+  action: FindingAction | null;
 };
 
 async function renderDoctor() {
@@ -533,6 +910,22 @@ async function renderDoctor() {
       const inner = el("div");
       inner.appendChild(el("div", "msg", finding.message));
       if (finding.suggestion) inner.appendChild(el("div", "fix", finding.suggestion));
+
+      // Every suggestion already names an action. Put it on a button rather
+      // than leaving the reader to go and find the thing themselves.
+      if (finding.action) {
+        const bar = el("div", "finding-actions");
+        if (finding.action.kind === "open") {
+          const name = finding.action.name;
+          const go = el("button", "btn", "Open");
+          go.type = "button";
+          go.addEventListener("click", () => navigate(() => openDetail(name)));
+          bar.appendChild(go);
+        } else {
+          bar.appendChild(revealButton(finding.action.path));
+        }
+        inner.appendChild(bar);
+      }
       row.appendChild(inner);
       list.appendChild(row);
     }
@@ -557,7 +950,11 @@ tabs.addEventListener("click", (event) => {
   view = next;
   for (const tab of tabs.querySelectorAll(".tab")) tab.classList.remove("is-on");
   button.classList.add("is-on");
-  void refresh();
+  // The machine changes underneath us — another window, a harness updating
+// itself, our own writes. Nothing here polls, so offer an explicit re-read.
+refreshButton.addEventListener("click", () => void refresh());
+
+void refresh();
 });
 
 async function refresh() {
@@ -572,5 +969,9 @@ async function refresh() {
     main.appendChild(el("pre", "error", String(error)));
   }
 }
+
+// The machine changes underneath us — another window, a harness updating
+// itself, our own writes. Nothing here polls, so offer an explicit re-read.
+refreshButton.addEventListener("click", () => void refresh());
 
 void refresh();

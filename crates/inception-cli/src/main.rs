@@ -48,6 +48,10 @@ enum Command {
         /// Comma-separated provider ids, or "all".
         #[arg(long, default_value = "all")]
         to: String,
+        /// Which harness's copy to deploy *from*, when copies disagree.
+        /// Without it, path order decides — which is no choice at all.
+        #[arg(long)]
+        from: Option<String>,
         /// Apply without asking. The diff is still printed.
         #[arg(long)]
         yes: bool,
@@ -94,7 +98,7 @@ fn main() -> Result<()> {
             What::Mcp => list_mcp(project),
         },
         Command::Drift { project } => drift(project),
-        Command::Deploy { name, to, yes, project } => deploy(name, to, yes, project),
+        Command::Deploy { name, to, from, yes, project } => deploy(name, to, from, yes, project),
         Command::Doctor { project } => doctor(project),
         Command::Remove { name, from, yes, project } => remove(name, from, yes, project),
         Command::Providers => providers(),
@@ -196,14 +200,24 @@ fn drift(project: Option<PathBuf>) -> Result<()> {
         }
 
         // Say *how* they differ, not just that they do.
+        //
+        // Deliberately not +/-: neither side is "before", and nothing is being
+        // changed by looking. The markers name which harness each line came
+        // from instead.
         if let Some(comparison) = inception_core::inventory::compare_copies(group)
             && inception_core::diff::has_changes(&comparison.lines)
         {
             println!();
-            println!("    --- {}", comparison.left.display());
-            println!("    +++ {}", comparison.right.display());
+            println!("    < {}  {}", comparison.left.hash, comparison.left.providers.join(", "));
+            println!("    > {}  {}", comparison.right.hash, comparison.right.providers.join(", "));
+            println!();
             for line in &comparison.lines {
-                println!("    {} {}", line.kind.sign(), truncate(&line.text, 96));
+                let marker = match line.kind {
+                    inception_core::diff::LineKind::Removed => '<',
+                    inception_core::diff::LineKind::Added => '>',
+                    inception_core::diff::LineKind::Context => ' ',
+                };
+                println!("    {marker} {}", truncate(&line.text, 96));
             }
         }
         println!();
@@ -296,7 +310,13 @@ fn doctor(project: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn deploy(name: String, to: String, yes: bool, project: Option<PathBuf>) -> Result<()> {
+fn deploy(
+    name: String,
+    to: String,
+    from: Option<String>,
+    yes: bool,
+    project: Option<PathBuf>,
+) -> Result<()> {
     use inception_core::plan;
     let (registry, ctx, scope) = survey(project)?;
     let found = inception_core::detect(&registry, &ctx, scope)?;
@@ -318,16 +338,28 @@ fn deploy(name: String, to: String, yes: bool, project: Option<PathBuf>) -> Resu
     // Find the artifact: a skill first, then an MCP server.
     let groups = inception_core::inventory::skills(&found, scope);
     let plan = if let Some(group) = groups.iter().find(|g| g.identity == name) {
-        let source = group
-            .locations
-            .iter()
-            .find(|l| l.entry.is_ok())
-            .map(|l| l.path.clone())
-            .ok_or_else(|| anyhow::anyhow!("skill '{name}' has no readable copy to deploy from"))?;
-        if group.locations.len() > 1 {
-            println!("note: '{name}' exists in {} places; deploying from {}
-",
-                group.locations.len(), source.display());
+        let chosen = match &from {
+            Some(provider) => inception_core::inventory::source_for(group, provider)
+                .ok_or_else(|| anyhow::anyhow!("{provider} has no readable copy of '{name}'"))?,
+            None => inception_core::inventory::default_source(group)
+                .ok_or_else(|| anyhow::anyhow!("'{name}' has no readable copy to deploy from"))?,
+        };
+        let source = chosen.path.clone();
+
+        // When copies disagree, say which one is about to win. Without --from
+        // that is decided by path order, which is no choice at all.
+        let versions = inception_core::inventory::versions(group);
+        if versions.len() > 1 {
+            println!(
+                "'{name}' exists in {} versions; using the copy from {}",
+                versions.len(),
+                chosen.providers.join(", ")
+            );
+            println!("  {}", source.display());
+            if from.is_none() {
+                println!("  pass --from <harness> to choose a different one");
+            }
+            println!();
         }
         plan::skill_deploy(&found, &targets, &source, scope)
     } else {

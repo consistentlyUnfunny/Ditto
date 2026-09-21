@@ -167,6 +167,46 @@ preview and apply flow are wired and type-check, but no one has clicked them.
 
 ---
 
+## M5a — GUI usability  *(all four phases done 2026-09-21)*
+
+Full review with reasoning in [docs/USABILITY.md](docs/USABILITY.md). Root cause:
+the UI shows the engine's verb ("deploy") instead of the user's intent, and the
+decision at the heart of resolving drift — **which version wins** — is not in the
+interface at all. The planner currently picks the first copy in path order.
+
+### Phase 1 — unbreak  *(done 2026-09-21)*
+- [x] **T-5.10** `detail` resolves MCP servers too; server rows currently error.
+- [x] **T-5.11** Fix the caption that still claims deploy only adds, never replaces.
+- [x] **T-5.12** Problem rows: explain, offer Show in folder, no deploy button.
+- [x] **T-5.13** Refresh control; re-read after apply.
+
+### Phase 2 — intent and choice  *(done 2026-09-21)*
+- [x] **T-5.14** Engine: explicit source for `skill_deploy`; `inventory::versions()` grouping by hash.
+- [x] **T-5.15** CLI: `deploy --from <provider>`. Picks that harness's *own*
+  copy in preference to a shared one — "OpenCode's version" must mean the copy in
+  `~/.config/opencode/skills`, not whatever happens to sit in `~/.agents/skills`
+  that OpenCode also reads. Pinned by
+  `source_for_prefers_a_providers_own_directory_over_a_shared_one`.
+- [x] **T-5.16** GUI: state-specific primary action, with a count in the label.
+- [x] **T-5.17** GUI: Resolve flow — pick the winning version, then see the cost.
+- [x] **T-5.18** GUI: Add flow — target checkboxes showing the shared write set.
+
+### Phase 3 — diff clarity  *(done 2026-09-21)*
+- [x] **T-5.19** Separate comparison rendering from change rendering; drop +/- for comparisons.
+- [x] **T-5.20** Remove the paper cards the comparison supersedes. *(landed early, in Phase 1; dead CSS cleaned up in Phase 3.)*
+
+### Phase 4 — polish  *(done 2026-09-21)*
+- [x] **T-5.21** Deprecated-path flag on matrix rows — a 5px amber dot, not a
+  badge. The first attempt used a "deprecated" pill, and with six of seven
+  skills in a deprecated location six repeated pills truncated the names the
+  column exists for. `doctor` states it once, in words; the matrix marks it.
+- [x] **T-5.22** Row click affordance.
+- [x] **T-5.23** Human vocabulary instead of DriftStatus names.
+- [x] **T-5.24** Actionable doctor findings.
+- [x] **T-5.25** Drawer back stack.
+
+---
+
 ## M5 — Later
 
 - [ ] **T-5.1** Provider spec editor with live validation. *F-9.4*
@@ -190,6 +230,7 @@ Tracked rather than guessed at. Each needs an answer before the milestone that d
 | Q-4 | Is `~/.agents/skills` genuinely stable, or still a moving community proposal? | T-3.4 | The whole minimum-write-set advantage rests on it. Re-check before M3. |
 | Q-5 | Project-scope UX — explicit `--project` flag, or infer from cwd? | M5 | Inferring is friendlier and more dangerous. |
 | Q-6 | Should `deploy` offer to migrate deprecated paths, or only `doctor` report them? | T-5.2 | Migration mutates state the user didn't ask about. Lean report-only. |
+| ~~Q-9~~ | **Decided 2026-09-21: overwrite.** Resolving drift replaces a deprecated copy rather than deleting it; `doctor` keeps suggesting migration separately. Deletion stays the one thing the app only does when explicitly asked. | — | — |
 | Q-8 | Should the GUI follow the OS theme, or stay committed to the slate-and-paper world? | M4 polish | It currently commits. Theme-following would mean designing a light chassis that keeps "paper = file content" meaningful. |
 | Q-7 | Where does an **imported** artifact live? A managed library under `~/.inception/`, or does the tool stay stateless and always deploy harness-to-harness? | T-3.9, T-3.10, T-3.13 | Everything about provenance, drift resolution and `import` depends on this. A library makes "which copy is canonical?" answerable — `deploy` currently just picks the first readable one and says so. Stateless keeps the tool honest about being a translator, not a store. |
 

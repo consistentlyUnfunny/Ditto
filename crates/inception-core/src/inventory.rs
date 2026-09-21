@@ -257,11 +257,82 @@ fn resolve_pointer(doc: &Value, template: &str) -> Vec<(String, Option<String>)>
 // Comparing copies
 // ---------------------------------------------------------------------------
 
+/// The copy a deploy uses as its source when the caller does not choose one.
+///
+/// Currently the first readable copy in path order — which is arbitrary, and is
+/// exactly why the UI has to *show* the answer rather than leave it implicit.
+/// Both the planner and the detail view call this, so the interface can never
+/// name a different source than the one that will actually be used.
+///
+/// T-5.14 replaces the implicit choice with an explicit one; this stays as the
+/// default for callers that don't care.
+pub fn default_source(group: &SkillGroup) -> Option<&SkillLocation> {
+    group.locations.iter().find(|l| l.entry.is_ok())
+}
+
+/// The copy belonging to a named provider, for `--from <provider>`.
+///
+/// A harness often reads several directories, so "OpenCode's version" is
+/// ambiguous when they disagree — OpenCode sees both its own
+/// `~/.config/opencode/skills` copy and whatever sits in the shared
+/// `~/.agents/skills`. Path order picked the shared one, which is the opposite
+/// of what someone means by "use OpenCode's copy".
+///
+/// Preference, in order:
+///   1. a directory only this harness reads, still current
+///   2. a shared directory
+///   3. a deprecated location, as a last resort
+///
+/// Codex lands on the shared directory by that rule, correctly: its only
+/// private directory is the deprecated one.
+pub fn source_for<'a>(group: &'a SkillGroup, provider: &str) -> Option<&'a SkillLocation> {
+    let mine = |l: &&SkillLocation| {
+        l.entry.is_ok() && l.providers.iter().any(|p| p == provider)
+    };
+    let rank = |l: &SkillLocation| match (l.shared, l.deprecated) {
+        (false, false) => 0,
+        (true, false) => 1,
+        _ => 2,
+    };
+    group.locations.iter().filter(mine).min_by_key(|l| rank(l))
+}
+
+/// The distinct versions of a skill, grouped by content.
+///
+/// Four copies holding two versions is a choice between *two* things, not four —
+/// which is how the resolve flow has to present it.
+pub fn versions(group: &SkillGroup) -> Vec<Vec<&SkillLocation>> {
+    let mut groups: Vec<(String, Vec<&SkillLocation>)> = Vec::new();
+    for location in group.locations.iter().filter(|l| l.entry.is_ok()) {
+        let hash = location
+            .entry
+            .skill()
+            .map(|s| s.content_hash.clone())
+            .unwrap_or_default();
+        match groups.iter_mut().find(|(h, _)| *h == hash) {
+            Some((_, members)) => members.push(location),
+            None => groups.push((hash, vec![location])),
+        }
+    }
+    groups.into_iter().map(|(_, members)| members).collect()
+}
+
+/// One side of a comparison, with enough identity to label it.
+///
+/// A comparison is between two *versions*, so the reader needs to know whose
+/// each one is — "codex, claude" tells them something a file path does not.
+#[derive(Debug)]
+pub struct CopySide {
+    pub path: PathBuf,
+    pub providers: Vec<String>,
+    pub hash: String,
+}
+
 /// A line-by-line comparison of two copies of the same skill.
 #[derive(Debug)]
 pub struct CopyComparison {
-    pub left: PathBuf,
-    pub right: PathBuf,
+    pub left: CopySide,
+    pub right: CopySide,
     pub lines: Vec<crate::diff::DiffLine>,
 }
 
@@ -294,9 +365,19 @@ pub fn compare_copies(group: &SkillGroup) -> Option<CopyComparison> {
         std::fs::read_to_string(location.path.join("SKILL.md")).unwrap_or_default()
     };
 
+    let side = |l: &SkillLocation| CopySide {
+        path: l.path.clone(),
+        providers: l.providers.clone(),
+        hash: l
+            .entry
+            .skill()
+            .map(|s| s.content_hash.chars().take(8).collect())
+            .unwrap_or_default(),
+    };
+
     Some(CopyComparison {
-        left: left.path.clone(),
-        right: right.path.clone(),
+        left: side(left),
+        right: side(right),
         // Generous context: these files are short, and seeing an edit in its
         // surroundings is the point.
         lines: crate::diff::lines(&read(left), &read(right), 4),

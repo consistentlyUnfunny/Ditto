@@ -31,6 +31,19 @@ impl Severity {
     }
 }
 
+/// Something a frontend can offer to do about a finding.
+///
+/// Every suggestion already names an action in prose; carrying it as data lets
+/// the GUI put a button on it instead of leaving the user to go and find the
+/// thing themselves.
+#[derive(Debug, Clone)]
+pub enum Action {
+    /// Open this artifact's detail view, by name.
+    Open(String),
+    /// Show this path in the OS file manager.
+    Reveal(std::path::PathBuf),
+}
+
 #[derive(Debug)]
 pub struct Finding {
     pub severity: Severity,
@@ -38,6 +51,7 @@ pub struct Finding {
     pub message: String,
     /// What to do about it, when there is an obvious answer.
     pub suggestion: Option<String>,
+    pub action: Option<Action>,
 }
 
 /// Run every check. Findings come back most severe first.
@@ -59,6 +73,7 @@ pub fn check(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<Finding> {
                     suggestion: Some(
                         "deploys to this harness will be refused until it parses".to_string(),
                     ),
+                    action: Some(Action::Reveal(file.path.clone())),
                 });
             }
         }
@@ -77,6 +92,7 @@ pub fn check(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<Finding> {
                 suggestion: canonical.map(|c| {
                     format!("move these skills to {c}, where more harnesses can see them")
                 }),
+                action: Some(Action::Reveal(dir.path.clone())),
             });
         }
     }
@@ -100,6 +116,7 @@ pub fn check(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<Finding> {
                 suggestion: Some(
                     "run `inception import` to move it into the OS keychain".to_string(),
                 ),
+                action: Some(Action::Open(server.name.clone())),
             });
         }
 
@@ -113,6 +130,7 @@ pub fn check(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<Finding> {
                     server.name
                 ),
                 suggestion: None,
+                action: Some(Action::Open(server.name.clone())),
             });
         }
 
@@ -136,6 +154,7 @@ pub fn check(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<Finding> {
                             server.name
                         ),
                         suggestion: Some(format!("did you mean '{near}'?")),
+                        action: Some(Action::Reveal(location.file.clone())),
                     });
                 }
             }
@@ -153,11 +172,10 @@ pub fn check(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<Finding> {
                     group.identity,
                     group.providers().join(" and ")
                 ),
-                suggestion: Some(format!(
-                    "`inception drift` shows the difference; `inception deploy {}` overwrites \
-                     from one source",
-                    group.identity
-                )),
+                suggestion: Some(
+                    "open it to compare the versions and pick which one wins".to_string(),
+                ),
+                action: Some(Action::Open(group.identity.clone())),
             }),
             DriftStatus::Problem => {
                 for location in &group.locations {
@@ -174,6 +192,7 @@ pub fn check(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<Finding> {
                             "the harness will ignore this directory; remove it or add a SKILL.md"
                                 .to_string(),
                         ),
+                        action: Some(Action::Reveal(location.path.clone())),
                     });
                 }
             }
@@ -238,6 +257,7 @@ pub fn dangling_references(
                         location.server.name
                     ),
                     suggestion: Some("deploys involving this server will fail".to_string()),
+                    action: Some(Action::Open(location.server.name.clone())),
                 });
             }
         }
