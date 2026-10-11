@@ -5,17 +5,17 @@
 # --- Frontend ---------------------------------------------------------------
 # node_modules is ~45 MB and fully described by package-lock.json.
 node_modules/
-# Vite build output. `cargo run -p inception-gui` needs it, so build the
-# frontend first: cd crates/inception-gui/ui && npm run build
-crates/inception-gui/ui/dist/
+# Vite build output. `cargo run -p ditto-gui` needs it, so build the
+# frontend first: cd crates/ditto-gui/ui && npm run build
+crates/ditto-gui/ui/dist/
 .vite/
 *.tsbuildinfo
 
 # --- Tauri ------------------------------------------------------------------
 # Regenerated from tauri.conf.json by tauri-build on every compile.
-crates/inception-gui/gen/schemas/
+crates/ditto-gui/gen/schemas/
 # Bundled installers.
-crates/inception-gui/target/
+crates/ditto-gui/target/
 
 # --- Local state ------------------------------------------------------------
 # Never commit anything read out of a real machine's config: these can contain
@@ -26,7 +26,7 @@ crates/inception-gui/target/
 # This tool's own settings and the library it manages. Both live under the
 # user's home, but a dev who symlinks them into the repo should not be one
 # `git add .` away from publishing their skills and project paths.
-.inception/
+.ditto/
 # Backups written by a deploy (T-2.11). Same reason: real file contents.
 /backups/
 # Secrets never belong here. The tool puts them in the OS keychain; a .env in
@@ -56,6 +56,6 @@ desktop.ini
 # Cargo.lock          — committed; this workspace produces binaries
 # ui/package-lock.json — committed; reproducible npm installs
 # ui/public/fonts/*.woff2 — vendored on purpose so the app works offline
-# crates/inception-gui/icons/ — small, generated once, part of the app's identity
-# crates/inception-core/tests/corpus/ — real configs with secrets scrubbed;
+# crates/ditto-gui/icons/ — small, generated once, part of the app's identity
+# crates/ditto-core/tests/corpus/ — real configs with secrets scrubbed;
 #                        the round-trip tests are meaningless without them

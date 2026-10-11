@@ -1,4 +1,4 @@
-# project-inception
+# Ditto
 
 One place to manage the skills and MCP servers scattered across every AI coding
 agent on your machine — without mangling the files they live in.
@@ -15,10 +15,17 @@ except for the lines it was asked to change.
 ```
 SKILL                      STATUS      AVAILABLE TO
 drift-demo                 DRIFTED     codex, copilot-cli, gemini-cli, opencode  (+ library)
-    ~/.inception/library/drift-demo   (your library)  changed 2 weeks ago
-    ~/.agents/skills/drift-demo       (shared dir)    changed 2 weeks ago
-    ~/.config/opencode/skills/drift-demo              changed 2 weeks ago
+    ~/.ditto/library/drift-demo           (your library)  changed 2 weeks ago
+    ~/.agents/skills/drift-demo           (shared dir)    changed 2 weeks ago
+    ~/.config/opencode/skills/drift-demo                  changed 2 weeks ago
 ```
+
+## The name
+
+The project is **Ditto** — a ditto mark means "same as above", which is what
+this does to a skill. The command is **`dit`**, because macOS already ships a
+`/usr/bin/ditto` for copying app bundles, and shadowing a system tool that
+packaging scripts depend on is a rude way to introduce yourself.
 
 ## Status
 
@@ -62,7 +69,7 @@ which is where the write count comes from:
 
 Four of the five read `~/.agents/skills`; Claude Code refuses it and reads
 `~/.claude/skills`, which OpenCode also reads. So two files reach all five, and
-`inception status` will tell you which of these actually exist on your machine.
+`dit status` will tell you which of these actually exist on your machine.
 
 ## Running it
 
@@ -78,9 +85,9 @@ Windows and macOS need nothing beyond Rust and Node.
 ### The CLI
 
 ```sh
-git clone https://github.com/ongkanghao/project-inception
-cd project-inception
-cargo run -p inception-cli -- status
+git clone https://github.com/ongkanghao/ditto
+cd ditto
+cargo run -p ditto-cli -- status
 ```
 
 That prints which harnesses it found and where their config lives — a good first
@@ -89,11 +96,11 @@ command, because it touches nothing.
 For a binary you can call by name:
 
 ```sh
-cargo build --release -p inception-cli
-./target/release/inception status      # Windows: target\release\inception.exe
+cargo build --release -p ditto-cli
+./target/release/dit status      # Windows: target\release\dit.exe
 ```
 
-`-p inception-cli` matters here. A bare `cargo build` builds the whole
+`-p ditto-cli` matters here. A bare `cargo build` builds the whole
 workspace, and the desktop window will not compile until its frontend has been
 built — see below.
 
@@ -107,11 +114,11 @@ The `frontendDist` configuration is set to `"ui/dist"` but this path doesn't exi
 ```
 
 ```sh
-cd crates/inception-gui/ui
+cd crates/ditto-gui/ui
 npm ci
 npm run build
 cd ../../..
-cargo run -p inception-gui
+cargo run -p ditto-gui
 ```
 
 After that, you only need to repeat the `npm run build` step when you change
@@ -121,7 +128,7 @@ For a release build:
 
 ```sh
 cargo build --release
-./target/release/inception-gui         # Windows: target\release\inception-gui.exe
+./target/release/ditto-gui         # Windows: target\release\ditto-gui.exe
 ```
 
 > On Windows, the **debug** build deliberately keeps a console window attached so
@@ -132,30 +139,30 @@ cargo build --release
 
 | Command | What it does |
 |---|---|
-| `inception status` | Which harnesses are installed, and where their config lives |
-| `inception list [skills\|mcp]` | One inventory across every harness |
-| `inception drift` | Skills that exist in several places with differing content, with a diff |
-| `inception doctor` | Deprecated paths, plaintext secrets, drift |
-| `inception deploy <name> [--to <ids>] [--from <id>]` | Copy a skill or server to other harnesses |
-| `inception import <name> [--from <id>]` | Adopt a skill into your library |
-| `inception transfer <name> --to project\|account --project <dir>` | Copy a skill between your account and a project |
-| `inception remove <name> [--from <ids>]` | Take a skill or server out of harnesses |
-| `inception projects [--add <dir>] [--forget <dir>]` | Projects your harnesses recorded, plus any you added |
-| `inception providers` | The loaded provider specs and what each supports |
-| `inception validate [file]` | Check a provider spec |
+| `dit status` | Which harnesses are installed, and where their config lives |
+| `dit list [skills\|mcp]` | One inventory across every harness |
+| `dit drift` | Skills that exist in several places with differing content, with a diff |
+| `dit doctor` | Deprecated paths, plaintext secrets, drift |
+| `dit deploy <name> [--to <ids>] [--from <id>]` | Copy a skill or server to other harnesses |
+| `dit import <name> [--from <id>]` | Adopt a skill into your library |
+| `dit transfer <name> --to project\|account --project <dir>` | Copy a skill between your account and a project |
+| `dit remove <name> [--from <ids>]` | Take a skill or server out of harnesses |
+| `dit projects [--add <dir>] [--forget <dir>]` | Projects your harnesses recorded, plus any you added |
+| `dit providers` | The loaded provider specs and what each supports |
+| `dit validate [file]` | Check a provider spec |
 
 Most commands take `--project <dir>` to work in project scope instead of your
 account, and anything that writes takes `--yes`.
 
 ### The library
 
-`inception import` copies a skill into `~/.inception/library/`, which no harness
+`dit import` copies a skill into `~/.ditto/library/`, which no harness
 reads. That copy is the one a deploy uses when you don't name a source —
 otherwise the winner is whichever path happened to sort first, which is no answer
 at all.
 
 It is a **location, not a mode**: switching it off (`use_library = false` in
-`~/.inception/config.toml`, or the switch in the window) stops that directory
+`~/.ditto/config.toml`, or the switch in the window) stops that directory
 being scanned and nothing else changes. Nothing imports on your behalf, and a
 deploy never writes into it.
 
@@ -166,9 +173,9 @@ deployed exists only there.
 
 | Path | What |
 |---|---|
-| `~/.inception/config.toml` | This tool's own settings |
-| `~/.inception/library/` | Skills you imported |
-| `~/.inception/backups/` | Copies of anything a write replaced |
+| `~/.ditto/config.toml` | This tool's own settings |
+| `~/.ditto/library/` | Skills you imported |
+| `~/.ditto/backups/` | Copies of anything a write replaced |
 
 Nothing else on your machine is ours. Every other path it touches belongs to a
 harness, and is only written when you ask.
@@ -176,14 +183,14 @@ harness, and is only written when you ask.
 ## Repository layout
 
 ```
-crates/inception-core/    the engine: detect, inventory, plan, write
-crates/inception-cli/     a thin shell over the engine
-crates/inception-gui/     Tauri window; ui/ is Vite + vanilla TypeScript
+crates/ditto-core/    the engine: detect, inventory, plan, write
+crates/ditto-cli/     a thin shell over the engine
+crates/ditto-gui/     Tauri window; ui/ is Vite + vanilla TypeScript
 providers/                one .provider.toml per harness — the data the engine reads
 docs/                     research, the provider spec format, requirements
 ```
 
-Both frontends are deliberately thin: every decision lives in `inception-core`,
+Both frontends are deliberately thin: every decision lives in `ditto-core`,
 so the CLI and the window can never disagree about what a deploy will do.
 
 ## Development
@@ -191,7 +198,7 @@ so the CLI and the window can never disagree about what a deploy will do.
 ```sh
 cargo test                              # the suite, including byte-identical round-trips
 cargo clippy --all-targets -- -D warnings
-cd crates/inception-gui/ui && npm run build   # typechecks, then bundles
+cd crates/ditto-gui/ui && npm run build   # typechecks, then bundles
 ```
 
 The window's frontend has **zero runtime dependencies** — no framework, no icon
@@ -200,7 +207,7 @@ has no business making network requests.
 
 ### Adding a harness
 
-Write a `providers/<id>.provider.toml`, run `inception validate <file>`, and it
+Write a `providers/<id>.provider.toml`, run `dit validate <file>`, and it
 appears everywhere — the matrix, the planner, drift detection, doctor. If you
 find yourself editing Rust to add a harness, something has gone wrong; that is
 the one rule the architecture exists to keep.

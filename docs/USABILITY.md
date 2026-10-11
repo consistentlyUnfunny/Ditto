@@ -35,7 +35,7 @@ That is the single biggest gap. Everything below is downstream of it.
 ## Broken
 
 **B-1 · Server rows are dead ends.**
-`detail` in `crates/inception-gui/src/main.rs` searches skills only:
+`detail` in `crates/ditto-gui/src/main.rs` searches skills only:
 
 ```rust
 inventory::skills(&found, scope).iter().find(|g| g.identity == name)
@@ -113,7 +113,7 @@ The drawer header reads `drifted`, `unique`, `problem`. Those are
 
 **C-7 · Doctor is a dead list.**
 Every finding names an action — "move these to `~/.agents/skills`", "run
-`inception import`" — and none of them is a button.
+`dit import`" — and none of them is a button.
 
 **C-8 · The drawer has no history.**
 *Cancel* on the plan screen re-fetches the detail view from scratch. There is no
@@ -166,7 +166,7 @@ Using the opencode version — 3 copies will be replaced:
 
   [ current → chosen diff ]
 
-  Backups go to ~/.inception/backups.
+  Backups go to ~/.ditto/backups.
                                           [ Back ]  [ Replace 3 copies ] 
 ```
 

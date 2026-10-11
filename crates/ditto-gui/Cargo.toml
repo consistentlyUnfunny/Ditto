@@ -1,0 +1,26 @@
+[package]
+name = "ditto-gui"
+description = "Desktop control surface for Ditto."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ditto-gui"
+path = "src/main.rs"
+
+# Like the CLI, this is a thin shell: every decision lives in ditto-core, so
+# the two frontends can never disagree about what a deploy will do (NF-5.1).
+[dependencies]
+ditto-core = { path = "../ditto-core" }
+tauri = { version = "2.11", features = [] }
+serde.workspace = true
+serde_json.workspace = true
+tauri-plugin-dialog = "2"
+
+[build-dependencies]
+tauri-build = { version = "2.6", features = [] }
+
+[lints.rust]
+unsafe_code = "forbid"

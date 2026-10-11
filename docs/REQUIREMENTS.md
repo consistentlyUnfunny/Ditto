@@ -28,8 +28,8 @@ team/multi-device sync, remote provider specs. All deferred behind
   may appear in engine source. *Test: grep the engine crate for `codex`, `opencode`,
   `claude` — zero hits outside `providers/` and test fixtures.*
 - **F-1.2** Built-in specs ship embedded in the binary; user specs load from
-  `~/.inception/providers/*.provider.toml` and override built-ins by `id`.
-- **F-1.3** `inception validate` enforces every rule in PROVIDER-SPEC.md §9.
+  `~/.ditto/providers/*.provider.toml` and override built-ins by `id`.
+- **F-1.3** `dit validate` enforces every rule in PROVIDER-SPEC.md §9.
 - **F-1.4** An invalid user spec disables only that provider, with a clear error.
   It never aborts startup or affects other providers.
 - **F-1.5** All built-in specs are validated in CI.
@@ -110,7 +110,7 @@ team/multi-device sync, remote provider specs. All deferred behind
 
 ## F-6 Provenance and the library
 
-**Q-7 decided 2026-10-10: a managed library under `~/.inception/library`,
+**Q-7 decided 2026-10-10: a managed library under `~/.ditto/library`,
 switchable off.** The deciding argument was not which model is purer but which
 one answers the question the engine actually has to answer. `default_source` is
 the single place the tool must say "which copy is canonical?", and without a
@@ -123,7 +123,7 @@ simply apply it.
   Nothing in the planner, in drift detection or in the resolve flow may branch
   on it. The evidence for this is that the rest of the suite runs with the
   library absent, so both states are covered by one body of tests.
-- **F-6.1** Record every managed artifact in `~/.inception/lock.toml`: source,
+- **F-6.1** Record every managed artifact in `~/.ditto/lock.toml`: source,
   content hash, target provider, target path, timestamp.
 - **F-6.2** Distinguish **managed** artifacts from ones that were already there.
 - **F-6.3** Detect a managed artifact edited in place (hash mismatch) and offer
@@ -132,10 +132,10 @@ simply apply it.
   metadata but never breaks a harness, and everything in it is re-derivable by
   rescanning.
 
-  *Amended 2026-10-10.* This used to be said of `~/.inception/` as a whole,
+  *Amended 2026-10-10.* This used to be said of `~/.ditto/` as a whole,
   which the library makes false: a skill imported and never deployed exists only
   there. The **library is data**; the lockfile remains cache. Backups under
-  `~/.inception/backups/` were already data by the same test, so the original
+  `~/.ditto/backups/` were already data by the same test, so the original
   wording had been inaccurate since T-2.11.
 - **F-6.5** `default_source` prefers the library copy. `source_for` — "which
   copy is *this harness's*?" — must never return it: the library is not a
@@ -158,7 +158,7 @@ simply apply it.
 - **F-7.1** Detect credential-shaped values in `env` and `headers` on import and
   offer to promote them to a `Ref`.
 - **F-7.2** Store secret values in the OS keychain (Windows Credential Manager,
-  macOS Keychain, Secret Service), never in `~/.inception/`.
+  macOS Keychain, Secret Service), never in `~/.ditto/`.
 - **F-7.3** A `Ref` resolves at emit time, and every deploy that writes a
   credential into a config says so in its preview, naming the variable and the
   file.
@@ -184,16 +184,16 @@ Engine-first: the GUI is a client of this, and everything is testable headlessly
 
 | Command | Does |
 |---|---|
-| `inception status` | which providers are installed, where, what version of layout |
-| `inception list [skills\|mcp]` | unified inventory |
-| `inception drift` | drift report |
-| `inception show <name>` | one artifact, canonical form, per-provider rendering |
-| `inception deploy <name> --to <ids>` | diff preview then write |
-| `inception remove <name> --from <ids>` | surgical removal |
-| `inception import <name> [--from <id>]` | adopt a copy into the library (F-6.5) |
-| `inception validate [spec]` | spec validation |
-| `inception doctor` | config health: deprecated paths, unknown keys, plaintext secrets |
-| `inception projects` | projects the harnesses have recorded, for `--project` |
+| `dit status` | which providers are installed, where, what version of layout |
+| `dit list [skills\|mcp]` | unified inventory |
+| `dit drift` | drift report |
+| `dit show <name>` | one artifact, canonical form, per-provider rendering |
+| `dit deploy <name> --to <ids>` | diff preview then write |
+| `dit remove <name> --from <ids>` | surgical removal |
+| `dit import <name> [--from <id>]` | adopt a copy into the library (F-6.5) |
+| `dit validate [spec]` | spec validation |
+| `dit doctor` | config health: deprecated paths, unknown keys, plaintext secrets |
+| `dit projects` | projects the harnesses have recorded, for `--project` |
 
 - **F-8.1** `--json` on every read command, for the GUI and for scripting.
 - **F-8.2** Exit non-zero on error; never a partial write with exit 0.
@@ -237,7 +237,7 @@ project is differentiated. **Do not defer NF-1 to get to the GUI sooner.**
 
 - **NF-2.1** Atomic writes — temp file in the same directory, then rename.
 - **NF-2.2** Timestamped backup of every file before first modification, in
-  `~/.inception/backups/`.
+  `~/.ditto/backups/`.
 - **NF-2.3** Never write outside paths declared by a provider spec.
 - **NF-2.4** A failed multi-target deploy reports exactly which targets were written
   and which were not. No silent partial success.
@@ -255,11 +255,11 @@ project is differentiated. **Do not defer NF-1 to get to the GUI sooner.**
 
 ## NF-4 Security
 
-- **NF-4.1** No secret ever written to `~/.inception/` or to logs.
+- **NF-4.1** No secret ever written to `~/.ditto/` or to logs.
 - **NF-4.2** No network access in the engine. (Marketplace is a later, separate,
   clearly-scoped component.)
 - **NF-4.3** Never execute anything found in a config or skill directory.
-- **NF-4.4** `inception doctor` flags plaintext credentials in harness configs.
+- **NF-4.4** `dit doctor` flags plaintext credentials in harness configs.
   *The dev machine has one: a plaintext API key in `opencode.jsonc`.*
 
 ## NF-5 Code quality
@@ -284,23 +284,23 @@ project is differentiated. **Do not defer NF-1 to get to the GUI sooner.**
 
 Done when all of these pass on the dev machine, unattended:
 
-1. `inception status` finds all five installed harnesses, including Gemini's
+1. `dit status` finds all five installed harnesses, including Gemini's
    non-standard post-migration layout.
-2. `inception list skills` shows **7** user skills (5 in Codex, 2 in OpenCode),
+2. `dit list skills` shows **7** user skills (5 in Codex, 2 in OpenCode),
    **excludes** the 6 in `~/.codex/skills/.system/`, and **reports** — rather than
    silently dropping — `~/.codex/skills/codex-primary-runtime/`, an empty
    directory with no `SKILL.md`.
    *Corrected 2026-09-15: this criterion originally said 8, counting the empty
    directory as a skill. The scanner found the discrepancy.*
-3. `inception drift` reports `karpathy-coder` drifted, `minimalist-ui` identical.
-4. `inception doctor` flags the deprecated `~/.codex/skills` path and the plaintext
+3. `dit drift` reports `karpathy-coder` drifted, `minimalist-ui` identical.
+4. `dit doctor` flags the deprecated `~/.codex/skills` path and the plaintext
    Obsidian API key.
 5. Round-trip tests pass byte-identically over all real configs on the machine,
    including `~/.codex/config.toml` with its literal strings and
    `~/.copilot/config.json` with its `//` comments.
-6. `inception deploy obsidian --to codex,claude-code` writes the server to both,
+6. `dit deploy obsidian --to codex,claude-code` writes the server to both,
    promotes the API key to the keychain, and the resulting `config.toml` diff
    contains **only** the added `[mcp_servers.obsidian]` block.
-7. `inception deploy karpathy-coder --to all` produces exactly two writes and says
+7. `dit deploy karpathy-coder --to all` produces exactly two writes and says
    why.
-8. Every write is reversible from `~/.inception/backups/`.
+8. Every write is reversible from `~/.ditto/backups/`.

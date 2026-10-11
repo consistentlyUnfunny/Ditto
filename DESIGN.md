@@ -1,4 +1,4 @@
-# project-inception — design notes
+# Ditto — design notes
 
 Status: the engine, the CLI and the desktop window all work. See
 [README.md](README.md) to build and run it, and [TODO.md](TODO.md) for where

@@ -30,14 +30,14 @@ Goal: see everything, touch nothing. Proves the spec format survives real files.
 T-1.19 (`--json`), T-1.23 (hazard regression tests).
 
 ### Scaffolding
-- [x] **T-1.1** Cargo workspace: `inception-core` (lib, no Tauri dep), `inception-cli` (bin). *NF-5.1*
+- [x] **T-1.1** Cargo workspace: `ditto-core` (lib, no Tauri dep), `ditto-cli` (bin). *NF-5.1*
 - [ ] **T-1.2** `git init`, `.gitignore`, CI running `cargo test` + `cargo clippy -- -D warnings`. *NF-5.2*
 - [x] **T-1.3** Error type. No `unwrap` outside tests. *NF-5.5*
 
 ### Spec loading
 - [x] **T-1.4** Deserialize a provider spec; reject unknown keys via `#[serde(deny_unknown_fields)]`. *F-1.1, F-1.3*
-- [x] **T-1.5** Embed built-in specs in the binary; load user overrides from `~/.inception/providers/`. *F-1.2*
-- [x] **T-1.6** `inception validate` covering every rule in PROVIDER-SPEC §9. *F-1.3*
+- [x] **T-1.5** Embed built-in specs in the binary; load user overrides from `~/.ditto/providers/`. *F-1.2*
+- [x] **T-1.6** `dit validate` covering every rule in PROVIDER-SPEC §9. *F-1.3*
 - [x] **T-1.7** All five built-in specs validated by a unit test (wire into CI with T-1.2). *F-1.5*
 - [x] **T-1.8** Path placeholder expansion: `{home} {user_home} {config} {project}`, `~/`, env overrides. *F-2.3, NF-3.5*
 
@@ -52,9 +52,9 @@ T-1.19 (`--json`), T-1.23 (hazard regression tests).
 - [x] **T-1.15** Skill scanner: walk dirs, apply `exclude`, parse frontmatter preserving unknown keys. *F-3.2, F-3.3*
 
 ### Commands
-- [x] **T-1.16** `inception status`. *F-8*
-- [x] **T-1.17** `inception list [skills|mcp]`. *F-3.1*
-- [ ] **T-1.18** `inception show <name>` — canonical form + per-provider rendering.
+- [x] **T-1.16** `dit status`. *F-8*
+- [x] **T-1.17** `dit list [skills|mcp]`. *F-3.1*
+- [ ] **T-1.18** `dit show <name>` — canonical form + per-provider rendering.
 - [ ] **T-1.19** `--json` on all read commands. *F-8.1*
 
 ### M1 acceptance
@@ -92,7 +92,7 @@ information (Q-1).
   - Rule 3 (never strip a field an update didn't set) is the one that will bite.
 - [x] **T-2.9** Line endings preserved per file. *NF-3.4*
 - [x] **T-2.10** Unparseable file ⇒ report and abort, never write. *NF-1.6*
-- [x] **T-2.11** Atomic write + backup to `~/.inception/backups/`. *NF-2.1, NF-2.2*
+- [x] **T-2.11** Atomic write + backup to `~/.ditto/backups/`. *NF-2.1, NF-2.2*
 - [x] **T-2.12** Fuzz the writers against the corpus.
 
 ---
@@ -125,7 +125,7 @@ and built in M7. `import` exists; the lockfile is now unblocked.
   they destroy, in both the CLI and the GUI.
 - [x] **T-3.7** MCP deploy.
 - [x] **T-3.8** Surgical removal. *F-5.7*
-- [ ] **T-3.9** Lockfile `~/.inception/lock.toml`. *F-6.1, F-6.2* — unblocked by M7; the library is where a managed artifact comes from
+- [ ] **T-3.9** Lockfile `~/.ditto/lock.toml`. *F-6.1, F-6.2* — unblocked by M7; the library is where a managed artifact comes from
 - [ ] **T-3.10** Detect edited-in-place managed artifacts; offer re-import / overwrite / leave. *F-6.3* — unblocked by M7
 - [x] **T-3.11** Partial-failure reporting. *NF-2.4*
 - [~] **T-3.12** Drift detection + diff. *F-4.1–F-4.3* — **skills only.** F-4.4
@@ -134,7 +134,7 @@ and built in M7. `import` exists; the lockfile is now unblocked.
 - [~] **T-3.13** Detection, keychain store and `Ref` resolution at emit are **done** (`secrets.rs`). `import` now exists for **skills** (M7); promoting a literal still waits on MCP servers being library artifacts (Q-12). *F-7.1–F-7.3*
 - [x] **T-3.14** Redaction everywhere. *F-7.4*
 - [ ] **T-3.15** Prefer native indirection (`bearer_token_env_var`). *F-7.5* — needs a spec field to declare it; not expressible in schema v1
-- [x] **T-3.16** `inception doctor`. *F-8, NF-4.4*
+- [x] **T-3.16** `dit doctor`. *F-8, NF-4.4*
 
 ### M3 acceptance — the full MVP bar
 - [x] **T-3.17** `drift` reports `karpathy-coder` drifted, `minimalist-ui` identical. *MVP #3, F-4.5*
@@ -147,17 +147,17 @@ and built in M7. `import` exists; the lockfile is now unblocked.
 
 ## M4 — Tauri GUI  *(matrix, drift, deploy and doctor working)*
 
-**Status 2026-09-20:** Tauri 2.11 shell in `crates/inception-gui`, frontend in
+**Status 2026-09-20:** Tauri 2.11 shell in `crates/ditto-gui`, frontend in
 `ui/` (Vite + vanilla TypeScript, zero runtime dependencies). Fonts bundled
 locally, so the app makes no network requests. Build with
-`cd crates/inception-gui/ui && npm run build`, then `cargo run -p inception-gui`.
+`cd crates/ditto-gui/ui && npm run build`, then `cargo run -p ditto-gui`.
 
 **Verified by running it:** the matrix renders the real machine — five columns,
 seven rows, the `karpathy-coder` drift staple and the `codex-primary-runtime`
 problem marker. **Not yet verified interactively:** the detail drawer, deploy
 preview and apply flow are wired and type-check, but no one has clicked them.
 
-- [x] **T-4.1** Tauri shell over `inception-core`; zero duplicated logic. *F-9.1*
+- [x] **T-4.1** Tauri shell over `ditto-core`; zero duplicated logic. *F-9.1*
 - [x] **T-4.2** Inventory view grouped by skill/server, showing presence per provider.
 - [x] **T-4.3** Drift view with side-by-side diff.
 - [x] **T-4.4** Deploy flow with the same preview + confirm as the CLI. *F-9.2*
@@ -221,7 +221,7 @@ have made the planner commit five skill directories to a repo instead of two.
 - [x] **T-6.3** Project discovery from `~/.claude.json` projects and Codex's
   `[projects.'...']` trust table, filtered to directories that still exist.
   Which files, and where in them, comes from `[projects]` in the specs. Surfaced
-  as `inception projects`; ten found on the dev machine, the duplicate casings of
+  as `dit projects`; ten found on the dev machine, the duplicate casings of
   this repo correctly collapsed into one.
 - [x] **T-6.4** Scope picker in the GUI title bar; `--project` already exists on
   every CLI read command. The title bar names the project and changes colour,
@@ -275,7 +275,7 @@ would have meant a second set of rules in the planner, in drift detection and in
 the resolve flow — four more places for the preview and the write to disagree,
 which is the class of bug every one of M6's five findings belonged to.
 
-- [x] **T-7.1** `~/.inception/config.toml` and `Settings` (`settings.rs`).
+- [x] **T-7.1** `~/.ditto/config.toml` and `Settings` (`settings.rs`).
   `use_library` defaults on; `deny_unknown_fields`, so a typo is an error rather
   than a setting that silently does nothing.
 - [x] **T-7.2** `SkillLocation.library`, and `inventory::skills` takes the
@@ -289,7 +289,7 @@ which is the class of bug every one of M6's five findings belonged to.
 - [x] **T-7.5** `plan::skill_import`, an ordinary `Step::Skill` write, so import
   inherits the preview, the replacement diff, backups and `apply` rather than
   growing its own. *F-6.6*
-- [x] **T-7.6** `inception import <name> [--from <harness>]`.
+- [x] **T-7.6** `dit import <name> [--from <harness>]`.
 - [x] **T-7.7** GUI: library column in the matrix, kept outside the harness
   track — the tie geometry divides that track by the number of harnesses, so
   folding the library in would shift every staple by half a column. Plus an
@@ -305,7 +305,7 @@ which is the class of bug every one of M6's five findings belonged to.
 
 ### Found by using it (2026-10-11)
 
-- [x] **T-7.11** The library switch existed only in `~/.inception/config.toml`,
+- [x] **T-7.11** The library switch existed only in `~/.ditto/config.toml`,
   so it was a setting you had to already know about to find. The column header
   now opens a panel that explains the library and toggles it. `Settings` gained
   `save()`, going through the same atomic write as everything else — a
@@ -315,7 +315,7 @@ which is the class of bug every one of M6's five findings belonged to.
   agent in — exactly the repo you would open the picker to set up. Hand-added
   paths live in `settings.projects`, deduplicated with `projects::key` so one
   repo cannot appear twice under two Windows spellings.
-  `inception projects --add <dir>` / `--forget <dir>`, plus an input and a
+  `dit projects --add <dir>` / `--forget <dir>`, plus an input and a
   remove control in the picker.
   - Only a hand-added project can be removed. A harness's record is that
     harness's config; dropping it from our list would make the row vanish and
@@ -343,7 +343,7 @@ which is the class of bug every one of M6's five findings belonged to.
   code.
 *(The native folder browser listed here as skipped was built the same day —
 see T-7.13.)*
-- **`~/.inception/` as cache.** F-6.4 was amended rather than preserved. The
+- **`~/.ditto/` as cache.** F-6.4 was amended rather than preserved. The
   library is data; pretending otherwise would promise a rescan can rebuild
   something it cannot.
 
@@ -376,7 +376,7 @@ Tracked rather than guessed at. Each needs an answer before the milestone that d
 | Q-10 | Should instruction files (`AGENTS.md`, `CLAUDE.md`) be managed? | — | **Decided 2026-09-22: no.** One filename, one format, nothing to translate — the provider-spec machinery has no work to do. Detected and reported only, via T-6.8. |
 | ~~Q-9~~ | **Decided 2026-09-21: overwrite.** Resolving drift replaces a deprecated copy rather than deleting it; `doctor` keeps suggesting migration separately. Deletion stays the one thing the app only does when explicitly asked. | — | — |
 | Q-8 | Should the GUI follow the OS theme, or stay committed to the slate-and-paper world? | M4 polish | It currently commits. Theme-following would mean designing a light chassis that keeps "paper = file content" meaningful. |
-| ~~Q-7~~ | **Decided 2026-10-10: a managed library at `~/.inception/library`, switchable off.** Built in M7. The library is a *location*, not a mode — turning it off removes a directory from the scan rather than selecting different rules. The "stateless translator" argument lost on a fact rather than on taste: `~/.inception/backups/` already held non-derivable data, so the purity being defended was gone before the question was asked. | — | — |
+| ~~Q-7~~ | **Decided 2026-10-10: a managed library at `~/.ditto/library`, switchable off.** Built in M7. The library is a *location*, not a mode — turning it off removes a directory from the scan rather than selecting different rules. The "stateless translator" argument lost on a fact rather than on taste: `~/.ditto/backups/` already held non-derivable data, so the purity being defended was gone before the question was asked. | — | — |
 | Q-12 | Should an **MCP server** be a library artifact too, and in what form? | T-3.13, MVP #6 | Skills map onto a library directory unchanged. A server does not: `McpServer.extra` is deliberately per-provider ("restored only to its own harness"), so a canonical library entry needs either per-provider extras or a rule for dropping them. That is a schema decision, which is why M7 stopped at skills. Until it is answered, promoting a literal secret on import has nowhere to live. |
 
 ---

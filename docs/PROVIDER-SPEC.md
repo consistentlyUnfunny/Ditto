@@ -9,7 +9,7 @@ code — HarnessKit carries ~11.4k lines of hand-written adapters across 14 file
 a spec can express every harness in [RESEARCH.md](RESEARCH.md), that entire category
 of work becomes a data file a contributor can write in twenty minutes.
 
-Specs are TOML. They live in `providers/` (built-in) and `~/.inception/providers/`
+Specs are TOML. They live in `providers/` (built-in) and `~/.ditto/providers/`
 (user-supplied; user specs override built-ins by `id`).
 
 ---
@@ -284,7 +284,7 @@ known = ["startup_timeout_sec", "tool_timeout_sec", "bearer_token_env_var"]
 ```
 
 `known` is documentation and validation only — unlisted keys are still preserved. It
-lets `inception doctor` flag a typo like `startup_timout_sec`.
+lets `dit doctor` flag a typo like `startup_timout_sec`.
 
 ---
 
@@ -519,7 +519,7 @@ nothing else in the file may move:
 
 ## 10. Validation
 
-`inception validate <spec.toml>` must reject:
+`dit validate <spec.toml>` must reject:
 
 - unknown top-level keys (typo protection)
 - a `[[mcp.locations]]` naming a `file` id that does not exist
