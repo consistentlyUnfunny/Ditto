@@ -85,8 +85,8 @@ Windows and macOS need nothing beyond Rust and Node.
 ### The CLI
 
 ```sh
-git clone https://github.com/ongkanghao/ditto
-cd ditto
+git clone https://github.com/consistentlyUnfunny/Ditto
+cd Ditto
 cargo run -p ditto-cli -- status
 ```
 
@@ -207,10 +207,25 @@ has no business making network requests.
 
 ### Adding a harness
 
-Write a `providers/<id>.provider.toml`, run `dit validate <file>`, and it
-appears everywhere — the matrix, the planner, drift detection, doctor. If you
-find yourself editing Rust to add a harness, something has gone wrong; that is
-the one rule the architecture exists to keep.
+Five harnesses ship built in, but the engine has no list of them — it reads
+whatever specs it is given. **You do not need this repository to add one.**
+
+Drop a `<id>.provider.toml` into `~/.ditto/providers/` and it appears
+everywhere: detection, the matrix, the write planner, drift, doctor. A spec
+there with the same `id` as a built-in replaces it, which is how you correct a
+path we got wrong without waiting for a release.
+
+```sh
+dit validate ~/.ditto/providers/mytool.provider.toml   # check it first
+dit providers                                          # it is now in the list
+```
+
+A broken spec is reported and skipped, never fatal — the other harnesses keep
+working while you fix it.
+
+Send one as a pull request if you want it built in, but that is a convenience,
+not the mechanism. If you ever find yourself editing Rust to add a harness,
+something has gone wrong; that is the one rule the architecture exists to keep.
 
 [docs/PROVIDER-SPEC.md](docs/PROVIDER-SPEC.md) documents the format.
 
