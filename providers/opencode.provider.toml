@@ -74,6 +74,18 @@ transports = ["stdio", "http", "sse"]
 headers    = true
 env        = true
 
+# ------------------------------------------------------- instructions
+
+# Declared for `doctor` only. OpenCode reads both, its own file first.
+[[instructions]]
+scope = "user"
+path  = "{home}/AGENTS.md"
+
+[[instructions]]
+scope  = "project"
+path   = "{project}/AGENTS.md"
+shared = true
+
 # ---------------------------------------------------------------- skills
 
 [skills]
@@ -81,6 +93,9 @@ supported = true
 layout    = "dir-with-skill-md"
 exclude   = [".*"]
 
+# OpenCode searches six directories, three per scope, and deliberately reads the
+# Claude and agents layouts for interoperability. Declared in its own precedence
+# order: the first match for a given name wins.
 [[skills.dirs]]
 scope     = "user"
 path      = "{home}/skills"
@@ -88,13 +103,28 @@ canonical = true                     # private dir, so "deploy to opencode only"
 
 [[skills.dirs]]
 scope  = "user"
+path   = "{user_home}/.claude/skills"
+shared = true
+
+[[skills.dirs]]
+scope  = "user"
 path   = "{user_home}/.agents/skills"
-shared = true                        # planner prefers this for multi-target deploys
+shared = true
 
 [[skills.dirs]]
 scope     = "project"
 path      = "{project}/.opencode/skills"
 canonical = true
+
+[[skills.dirs]]
+scope  = "project"
+path   = "{project}/.claude/skills"
+shared = true
+
+[[skills.dirs]]
+scope  = "project"
+path   = "{project}/.agents/skills"
+shared = true
 
 [skills.frontmatter]
 required = ["name", "description"]

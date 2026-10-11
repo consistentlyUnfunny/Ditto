@@ -182,6 +182,28 @@ pub fn validate(spec: &ProviderSpec) -> Result<()> {
     if let Some(skills) = &spec.skills {
         validate_skills(spec, skills)?;
     }
+    if let Some(projects) = &spec.projects {
+        if spec.file(&projects.file).is_none() {
+            return Err(Error::invalid(
+                id,
+                format!("projects references unknown file id '{}'", projects.file),
+            ));
+        }
+        pointer::validate(&projects.pointer)
+            .map_err(|e| Error::invalid(id, format!("projects pointer is invalid: {e}")))?;
+    }
+
+    // Two declarations of the same instruction path would double-count in the
+    // shadowing check and make its message nonsense.
+    let mut seen = std::collections::BTreeSet::new();
+    for file in &spec.instructions {
+        if !seen.insert((file.scope.as_str(), file.path.as_str())) {
+            return Err(Error::invalid(
+                id,
+                format!("duplicate instructions path '{}'", file.path),
+            ));
+        }
+    }
     Ok(())
 }
 

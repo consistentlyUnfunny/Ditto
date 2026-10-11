@@ -69,6 +69,10 @@ pub enum Error {
     #[error("secret '{name}' could not be stored in the keychain: {reason}")]
     SecretStore { name: String, reason: String },
 
+    /// A name the user gave that does not match anything installed.
+    #[error("{0}")]
+    NotFound(String),
+
     #[error("{path} is not valid {format}: {reason}")]
     ConfigParse {
         path: PathBuf,

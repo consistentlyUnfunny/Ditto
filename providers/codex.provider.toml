@@ -28,6 +28,13 @@ scope  = "project"
 format = "toml"
 path   = "{project}/.codex/config.toml"
 
+# ---------------------------------------------------------------- projects
+
+# Codex records a trust level per project, keyed by absolute path.
+[projects]
+file    = "global"
+pointer = "/projects"
+
 # ---------------------------------------------------------------- mcp
 
 [mcp]
@@ -67,6 +74,18 @@ env        = true
 # writing a literal token (REQUIREMENTS.md F-7.5).
 known = ["startup_timeout_sec", "tool_timeout_sec", "bearer_token_env_var"]
 
+# ------------------------------------------------------- instructions
+
+# Declared for `doctor` only. Codex reads AGENTS.md and its own global file.
+[[instructions]]
+scope = "user"
+path  = "{home}/AGENTS.md"
+
+[[instructions]]
+scope  = "project"
+path   = "{project}/AGENTS.md"
+shared = true
+
 # ---------------------------------------------------------------- skills
 
 [skills]
@@ -90,6 +109,7 @@ deprecated = true
 [[skills.dirs]]
 scope     = "project"
 path      = "{project}/.agents/skills"
+shared    = true                     # OpenCode, Gemini and Copilot read this too
 canonical = true
 
 [skills.frontmatter]

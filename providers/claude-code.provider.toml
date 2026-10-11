@@ -28,6 +28,14 @@ scope  = "project"
 format = "jsonc"
 path   = "{project}/.mcp.json"
 
+# ---------------------------------------------------------------- projects
+
+# Claude Code keeps per-project settings keyed by absolute path, which doubles
+# as a record of where the user works.
+[projects]
+file    = "user_json"
+pointer = "/projects"
+
 # ---------------------------------------------------------------- mcp
 
 [mcp]
@@ -83,6 +91,29 @@ transports = ["stdio", "http", "sse", "ws"]
 headers    = true
 env        = true
 
+# ------------------------------------------------------- instructions
+
+# Declared for `doctor` only — never read, written or merged. Claude Code now
+# loads AGENTS.md as well as its own file, so a repo holding both hands one
+# harness two sets of standing instructions.
+[[instructions]]
+scope = "user"
+path  = "{home}/CLAUDE.md"
+
+[[instructions]]
+scope = "user"
+path  = "{user_home}/.agents/AGENTS.md"
+shared = true
+
+[[instructions]]
+scope = "project"
+path  = "{project}/CLAUDE.md"
+
+[[instructions]]
+scope  = "project"
+path   = "{project}/AGENTS.md"
+shared = true
+
 # ---------------------------------------------------------------- skills
 
 [skills]
@@ -97,15 +128,20 @@ exclude   = [".*", "synced"]
 # NOTE: deliberately no ~/.agents/skills entry. The docs are explicit:
 # "Claude Code does not read ~/.agents/skills/. Use ~/.claude/skills/ instead."
 # This is why deploying a skill everywhere needs two writes, not one.
+# `shared` here is about who *reads* the directory, not who owns it: OpenCode
+# reads ~/.claude/skills, and OpenCode and Copilot both read .claude/skills in a
+# repo. Marking it lets the planner collapse those onto one write.
 [[skills.dirs]]
 scope     = "user"
 path      = "{home}/skills"
 canonical = true
+shared    = true
 
 [[skills.dirs]]
 scope     = "project"
 path      = "{project}/.claude/skills"
 canonical = true
+shared    = true
 
 [skills.frontmatter]
 required = ["name", "description"]

@@ -1,11 +1,14 @@
 # project-inception — design notes
 
-Status: M0 complete (toolchain + research + spec). No engine code yet.
+Status: the engine, the CLI and the desktop window all work. See
+[README.md](README.md) to build and run it, and [TODO.md](TODO.md) for where
+the work actually is.
 
 ## Documents
 
 | Doc | What it holds |
 |---|---|
+| [README.md](README.md) | what it is, how to build and run it |
 | **DESIGN.md** (this file) | positioning, decisions, architecture |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | verified harness facts — paths, schemas, hazards |
 | [docs/PROVIDER-SPEC.md](docs/PROVIDER-SPEC.md) | the provider spec format v1 + canonical model |

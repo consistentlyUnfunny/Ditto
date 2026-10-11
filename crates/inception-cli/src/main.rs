@@ -4,10 +4,11 @@
 //! (M4) and the CLI stay in lockstep (F-9.1).
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use inception_core::spec::Scope;
-use inception_core::{PathContext, Registry};
+use inception_core::{PathContext, Registry, Settings};
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 #[derive(Parser)]
 #[command(
@@ -36,6 +37,33 @@ enum Command {
         #[arg(long)]
         project: Option<PathBuf>,
     },
+    /// List the projects your harnesses have recorded, plus any you added.
+    Projects {
+        /// Add a directory to the list. Harness records cover where you already
+        /// work; this covers a repo you have not opened an agent in yet.
+        #[arg(long, value_name = "DIR")]
+        add: Option<PathBuf>,
+        /// Drop a directory you added. A harness's own record is not ours to
+        /// remove — it would reappear on the next scan.
+        #[arg(long, value_name = "DIR")]
+        forget: Option<PathBuf>,
+    },
+    /// Copy a skill between your account and a project (F-5.9).
+    Transfer {
+        /// Skill name, as shown by `list`.
+        name: String,
+        /// Where it should end up.
+        #[arg(long, value_enum)]
+        to: Where,
+        /// The project. Required — a transfer needs two scopes.
+        #[arg(long)]
+        project: PathBuf,
+        /// Comma-separated provider ids, or "all".
+        #[arg(long, default_value = "all")]
+        targets: String,
+        #[arg(long)]
+        yes: bool,
+    },
     /// Report skills that exist in several places with differing content.
     Drift {
         #[arg(long)]
@@ -57,6 +85,17 @@ enum Command {
         yes: bool,
         #[arg(long)]
         project: Option<PathBuf>,
+    },
+    /// Adopt a skill into your library, so deploys have a canonical source.
+    Import {
+        /// Skill name, as shown by `list`.
+        name: String,
+        /// Which harness's copy to adopt, when copies disagree.
+        #[arg(long)]
+        from: Option<String>,
+        /// Apply without asking. The diff is still printed.
+        #[arg(long)]
+        yes: bool,
     },
     /// Remove a skill or MCP server from harnesses.
     Remove {
@@ -89,6 +128,14 @@ enum What {
     Mcp,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum Where {
+    /// Into the project, where your team sees it.
+    Project,
+    /// Out to your account, where every project sees it.
+    Account,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -97,6 +144,11 @@ fn main() -> Result<()> {
             What::Skills => list_skills(project),
             What::Mcp => list_mcp(project),
         },
+        Command::Projects { add, forget } => projects(add, forget),
+        Command::Transfer { name, to, project, targets, yes } => {
+            transfer(name, to, project, targets, yes)
+        }
+        Command::Import { name, from, yes } => import(name, from, yes),
         Command::Drift { project } => drift(project),
         Command::Deploy { name, to, from, yes, project } => deploy(name, to, from, yes, project),
         Command::Doctor { project } => doctor(project),
@@ -107,7 +159,7 @@ fn main() -> Result<()> {
 }
 
 /// Shared setup: load specs, resolve scope, probe the machine.
-fn survey(project: Option<PathBuf>) -> Result<(Registry, PathContext, Scope)> {
+fn survey(project: Option<PathBuf>) -> Result<(Registry, PathContext, Scope, Settings)> {
     let registry = Registry::load();
     report_rejected(&registry);
     let mut ctx = PathContext::detect()?;
@@ -118,13 +170,193 @@ fn survey(project: Option<PathBuf>) -> Result<(Registry, PathContext, Scope)> {
         }
         None => Scope::User,
     };
-    Ok((registry, ctx, scope))
+    Ok((registry, ctx, scope, Settings::load()?))
+}
+
+/// Who holds a copy, for a line that lists one.
+///
+/// The library is read by no harness, so its provider list is empty and would
+/// otherwise print as nothing at all.
+fn holder(location: &inception_core::inventory::SkillLocation) -> String {
+    if location.library {
+        "your library".to_string()
+    } else {
+        location.providers.join(", ")
+    }
+}
+
+/// A recency label, or nothing when the filesystem would not say.
+///
+/// Recency is shown while choosing and never used to choose — see
+/// `inception_core::when` for why.
+fn changed(at: Option<std::time::SystemTime>) -> String {
+    match at {
+        Some(t) => format!("  changed {}", inception_core::when::relative(t, SystemTime::now())),
+        None => String::new(),
+    }
+}
+
+/// Projects a harness has recorded — a better list than anything we could get
+/// by crawling directories, because it is where the user actually works — plus
+/// any they added by hand, which is the only way a repo with no agent history
+/// can get on the list at all.
+fn projects(add: Option<PathBuf>, forget: Option<PathBuf>) -> Result<()> {
+    let registry = Registry::load();
+    let ctx = PathContext::detect()?;
+    let mut settings = inception_core::Settings::load()?;
+
+    if let Some(dir) = add {
+        let dir = std::path::absolute(&dir)?;
+        if !dir.is_dir() {
+            anyhow::bail!("{} is not a directory", dir.display());
+        }
+        if settings.add_project(&dir) {
+            let path = settings.save()?;
+            println!("Added {}
+  recorded in {}
+", dir.display(), path.display());
+        } else {
+            println!("{} is already on the list.
+", dir.display());
+        }
+    }
+
+    if let Some(dir) = forget {
+        let dir = std::path::absolute(&dir)?;
+        if settings.forget_project(&dir) {
+            settings.save()?;
+            println!("Forgot {}
+", dir.display());
+        } else {
+            // Say *why* rather than reporting a silent no-op: the likeliest
+            // reason is that a harness recorded it, and that is not ours to
+            // remove.
+            println!(
+                "{} was not on your list. If it still shows up, a harness recorded it — 
+                 clear it in that harness's own config.
+",
+                dir.display()
+            );
+        }
+    }
+
+    let found = inception_core::detect(&registry, &ctx, Scope::User)?;
+    let projects = inception_core::projects::discover(&found, &settings.projects);
+
+    if projects.is_empty() {
+        println!("No projects yet. Add one with `inception projects --add <dir>`.");
+        return Ok(());
+    }
+
+    for project in &projects {
+        let tags = {
+            let mut tags = Vec::new();
+            if project.is_git {
+                tags.push("git".to_string());
+            }
+            tags.extend(project.markers.iter().cloned());
+            tags
+        };
+        println!("{}", project.name);
+        println!("  {}", project.path.display());
+        if project.sources.is_empty() {
+            println!("  added by you; no harness has been used here yet");
+        } else {
+            println!(
+                "  known to {}{}",
+                project.sources.join(", "),
+                if project.added { "  (also on your list)" } else { "" }
+            );
+        }
+        if !tags.is_empty() {
+            println!("  has {}", tags.join(", "));
+        }
+    }
+    println!();
+    println!(
+        "{} project{}. Pass --project <path> to any command to work in one.",
+        projects.len(),
+        if projects.len() == 1 { "" } else { "s" }
+    );
+    Ok(())
+}
+
+/// Move a skill between scopes. Same planner and preview as `deploy`, because
+/// a transfer is a deploy whose source sits in the other scope (F-5.9).
+fn transfer(
+    name: String,
+    to: Where,
+    project: PathBuf,
+    targets: String,
+    yes: bool,
+) -> Result<()> {
+    use inception_core::scope::Direction;
+
+    let registry = Registry::load();
+    let ctx = PathContext::detect()?;
+    let settings = Settings::load()?;
+    let project = std::path::absolute(&project)?;
+    let direction = match to {
+        Where::Project => Direction::IntoProject,
+        Where::Account => Direction::IntoAccount,
+    };
+    let targets: Vec<String> = if targets == "all" {
+        Vec::new()
+    } else {
+        targets.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    };
+
+    let plan =
+        inception_core::scope::transfer(
+            &registry,
+            &ctx,
+            &project,
+            &name,
+            direction,
+            &targets,
+            settings.library().as_deref(),
+        )?;
+
+    if plan.is_empty() && plan.refusals.is_empty() {
+        println!("Nothing to do — '{name}' is already there.");
+        return Ok(());
+    }
+
+    print!("{}", inception_core::plan::preview(&plan)?);
+    if plan.is_empty() {
+        std::process::exit(1);
+    }
+    println!(
+        "{} write(s), serving: {}",
+        plan.steps.len(),
+        plan.providers_served().join(", ")
+    );
+
+    if !yes && !confirm()? {
+        println!("Aborted. Nothing was written.");
+        return Ok(());
+    }
+
+    let mut failed = false;
+    for outcome in inception_core::plan::apply(&plan) {
+        match &outcome.result {
+            Ok(message) => println!("ok    {} — {message}", outcome.target.display()),
+            Err(e) => {
+                failed = true;
+                eprintln!("FAIL  {} — {e}", outcome.target.display());
+            }
+        }
+    }
+    if failed {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 fn list_skills(project: Option<PathBuf>) -> Result<()> {
-    let (registry, ctx, scope) = survey(project)?;
+    let (registry, ctx, scope, settings) = survey(project)?;
     let found = inception_core::detect(&registry, &ctx, scope)?;
-    let groups = inception_core::inventory::skills(&found, scope);
+    let groups = inception_core::inventory::skills(&found, scope, settings.library().as_deref());
 
     if groups.is_empty() {
         println!("No skills found.");
@@ -133,11 +365,18 @@ fn list_skills(project: Option<PathBuf>) -> Result<()> {
 
     print_skill_row("SKILL", "STATUS", "AVAILABLE TO");
     for group in &groups {
-        print_skill_row(
-            &truncate(&group.identity, 25),
-            group.status.label(),
-            &group.providers().join(", "),
-        );
+        // `providers()` lists harnesses only. A skill that is in the library
+        // and nowhere else would otherwise show a blank "available to" column,
+        // which reads as "nothing can see this" rather than "not deployed yet".
+        let mut seen_by = group.providers().join(", ");
+        if group.locations.iter().any(|l| l.library) {
+            seen_by = if seen_by.is_empty() {
+                "library only".to_string()
+            } else {
+                format!("{seen_by}  (+ library)")
+            };
+        }
+        print_skill_row(&truncate(&group.identity, 25), group.status.label(), &seen_by);
         for location in &group.locations {
             let note = match &location.entry.state {
                 inception_core::SkillState::Ok(_) if location.shared => "  (shared dir)",
@@ -146,7 +385,15 @@ fn list_skills(project: Option<PathBuf>) -> Result<()> {
                 inception_core::SkillState::Invalid(_) => "  !! unreadable",
             };
             let deprecated = if location.deprecated { "  !! deprecated path" } else { "" };
-            println!("    {}{}{}", location.path.display(), note, deprecated);
+            let mine = if location.library { "  (your library)" } else { "" };
+            println!(
+                "    {}{}{}{}{}",
+                location.path.display(),
+                note,
+                deprecated,
+                mine,
+                changed(location.modified())
+            );
         }
     }
 
@@ -167,11 +414,96 @@ fn list_skills(project: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
+/// `inception import <name>` — copy a harness's skill into `~/.inception/library`.
+///
+/// The library is the answer to "which copy is canonical?" (Q-7). Nothing else
+/// writes to it: a deploy reads it but never fills it, so adopting a skill stays
+/// a decision rather than a side effect.
+fn import(name: String, from: Option<String>, yes: bool) -> Result<()> {
+    let (registry, ctx, scope, settings) = survey(None)?;
+
+    let Some(library) = settings.library() else {
+        anyhow::bail!(
+            "the library is switched off — remove `use_library = false` from {}",
+            inception_core::settings::settings_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "~/.inception/config.toml".to_string())
+        );
+    };
+
+    let found = inception_core::detect(&registry, &ctx, scope)?;
+    let groups =
+        inception_core::inventory::skills(&found, scope, settings.library().as_deref());
+    let group = groups
+        .iter()
+        .find(|g| g.identity == name)
+        .ok_or_else(|| anyhow::anyhow!("no skill named '{name}'"))?;
+
+    // Which copy to adopt. Without --from this is path order, which is exactly
+    // the arbitrariness the library exists to end — so say which one won.
+    let chosen = match &from {
+        Some(provider) => inception_core::inventory::source_for(group, provider)
+            .ok_or_else(|| anyhow::anyhow!("{provider} has no readable copy of '{name}'"))?,
+        None => group
+            .locations
+            .iter()
+            .find(|l| !l.library && l.entry.is_ok())
+            .ok_or_else(|| anyhow::anyhow!("'{name}' has no readable copy to import"))?,
+    };
+
+    let versions = inception_core::inventory::versions(group);
+    if versions.len() > 1 {
+        println!(
+            "'{name}' exists in {} versions; importing the copy from {}{}",
+            versions.len(),
+            holder(chosen),
+            changed(chosen.modified())
+        );
+        println!("  {}", chosen.path.display());
+        if from.is_none() {
+            println!("  pass --from <harness> to adopt a different one");
+        }
+        println!();
+    }
+
+    let plan = inception_core::plan::skill_import(&chosen.path, &library);
+    if plan.is_empty() && plan.refusals.is_empty() {
+        println!("Nothing to do.");
+        return Ok(());
+    }
+
+    print!("{}", inception_core::plan::preview(&plan)?);
+    if plan.is_empty() {
+        return Ok(());
+    }
+    if !yes && !confirm()? {
+        println!("Aborted. Nothing was written.");
+        return Ok(());
+    }
+
+    let mut failed = false;
+    for outcome in inception_core::plan::apply(&plan) {
+        match &outcome.result {
+            Ok(message) => println!("ok    {} - {message}", outcome.target.display()),
+            Err(e) => {
+                failed = true;
+                eprintln!("FAIL  {} - {e}", outcome.target.display());
+            }
+        }
+    }
+    if failed {
+        std::process::exit(1);
+    }
+    println!("
+'{name}' is now in your library; deploys will use it unless you say otherwise.");
+    Ok(())
+}
+
 fn drift(project: Option<PathBuf>) -> Result<()> {
     use inception_core::inventory::DriftStatus;
-    let (registry, ctx, scope) = survey(project)?;
+    let (registry, ctx, scope, settings) = survey(project)?;
     let found = inception_core::detect(&registry, &ctx, scope)?;
-    let groups = inception_core::inventory::skills(&found, scope);
+    let groups = inception_core::inventory::skills(&found, scope, settings.library().as_deref());
 
     let interesting: Vec<_> = groups
         .iter()
@@ -193,7 +525,7 @@ fn drift(project: Option<PathBuf>) -> Result<()> {
                         &skill.content_hash[..8],
                         location.path.display()
                     );
-                    println!("             {}", location.providers.join(", "));
+                    println!("             {}{}", holder(location), changed(location.modified()));
                 }
                 None => println!("    ????     {}  (unreadable)", location.path.display()),
             }
@@ -208,8 +540,12 @@ fn drift(project: Option<PathBuf>) -> Result<()> {
             && inception_core::diff::has_changes(&comparison.lines)
         {
             println!();
-            println!("    < {}  {}", comparison.left.hash, comparison.left.providers.join(", "));
-            println!("    > {}  {}", comparison.right.hash, comparison.right.providers.join(", "));
+            let side = |s: &inception_core::inventory::CopySide| {
+                let who = if s.library { "your library".to_string() } else { s.providers.join(", ") };
+                format!("{who}{}", changed(s.modified))
+            };
+            println!("    < {}  {}", comparison.left.hash, side(&comparison.left));
+            println!("    > {}  {}", comparison.right.hash, side(&comparison.right));
             println!();
             for line in &comparison.lines {
                 let marker = match line.kind {
@@ -226,7 +562,10 @@ fn drift(project: Option<PathBuf>) -> Result<()> {
 }
 
 fn list_mcp(project: Option<PathBuf>) -> Result<()> {
-    let (registry, ctx, scope) = survey(project)?;
+    // No `settings`: MCP servers are not library artifacts yet. Storing one
+    // canonically needs a decision about `extra`, which is per-provider by
+    // design — see TODO Q-12.
+    let (registry, ctx, scope, _settings) = survey(project)?;
     let found = inception_core::detect(&registry, &ctx, scope)?;
     let servers = inception_core::inventory::mcp_servers(&found, scope);
 
@@ -277,10 +616,10 @@ fn list_mcp(project: Option<PathBuf>) -> Result<()> {
 
 fn doctor(project: Option<PathBuf>) -> Result<()> {
     use inception_core::doctor::Severity;
-    let (registry, ctx, scope) = survey(project)?;
+    let (registry, ctx, scope, settings) = survey(project)?;
     let found = inception_core::detect(&registry, &ctx, scope)?;
 
-    let mut findings = inception_core::doctor::check(&found, scope);
+    let mut findings = inception_core::doctor::check(&found, scope, settings.library().as_deref());
     findings.extend(inception_core::doctor::dangling_references(
         &found,
         scope,
@@ -318,7 +657,7 @@ fn deploy(
     project: Option<PathBuf>,
 ) -> Result<()> {
     use inception_core::plan;
-    let (registry, ctx, scope) = survey(project)?;
+    let (registry, ctx, scope, settings) = survey(project)?;
     let found = inception_core::detect(&registry, &ctx, scope)?;
 
     let installed: Vec<String> = found
@@ -336,7 +675,7 @@ fn deploy(
     }
 
     // Find the artifact: a skill first, then an MCP server.
-    let groups = inception_core::inventory::skills(&found, scope);
+    let groups = inception_core::inventory::skills(&found, scope, settings.library().as_deref());
     let plan = if let Some(group) = groups.iter().find(|g| g.identity == name) {
         let chosen = match &from {
             Some(provider) => inception_core::inventory::source_for(group, provider)
@@ -351,9 +690,10 @@ fn deploy(
         let versions = inception_core::inventory::versions(group);
         if versions.len() > 1 {
             println!(
-                "'{name}' exists in {} versions; using the copy from {}",
+                "'{name}' exists in {} versions; using the copy from {}{}",
                 versions.len(),
-                chosen.providers.join(", ")
+                holder(chosen),
+                changed(chosen.modified())
             );
             println!("  {}", source.display());
             if from.is_none() {
@@ -414,7 +754,7 @@ fn deploy(
 
 fn remove(name: String, from: String, yes: bool, project: Option<PathBuf>) -> Result<()> {
     use inception_core::plan;
-    let (registry, ctx, scope) = survey(project)?;
+    let (registry, ctx, scope, settings) = survey(project)?;
     let found = inception_core::detect(&registry, &ctx, scope)?;
 
     let targets: Vec<String> = if from == "all" {
@@ -424,7 +764,7 @@ fn remove(name: String, from: String, yes: bool, project: Option<PathBuf>) -> Re
     };
 
     // Skills first, then MCP servers — matching how `deploy` resolves a name.
-    let groups = inception_core::inventory::skills(&found, scope);
+    let groups = inception_core::inventory::skills(&found, scope, settings.library().as_deref());
     let plan = if groups.iter().any(|g| g.identity == name) {
         plan::skill_remove(&found, &targets, &name, scope)
     } else {

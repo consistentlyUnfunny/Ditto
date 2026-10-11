@@ -28,6 +28,20 @@ pub struct SkillLocation {
     pub entry: SkillEntry,
     pub shared: bool,
     pub deprecated: bool,
+    /// For each provider that reads this path, where the directory sits in that
+    /// harness's own precedence order. Lower is read first.
+    pub order: Vec<(String, usize)>,
+    /// This copy is the one in `~/.inception/library` — ours, read by no
+    /// harness. `providers` is empty for it, which is why the flag is needed:
+    /// "nobody reads this" and "this is the library" look identical otherwise.
+    pub library: bool,
+}
+
+impl SkillLocation {
+    /// When this copy last changed, for the recency label (see [`crate::when`]).
+    pub fn modified(&self) -> Option<std::time::SystemTime> {
+        self.entry.modified
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,9 +102,26 @@ impl SkillGroup {
 }
 
 /// Build the skill inventory for a scope.
-pub fn skills(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<SkillGroup> {
-    // path -> (providers reading it, flags)
-    let mut dirs: BTreeMap<PathBuf, (Vec<String>, bool, bool)> = BTreeMap::new();
+///
+/// `library` is `~/.inception/library` when the library is enabled (see
+/// [`crate::settings`]), else `None`. It is passed in rather than read from
+/// settings here so the engine stays a pure function of what it is handed, and
+/// so tests can point it at a temporary directory.
+///
+/// The library is a **user-scope** concept: it belongs to the account, exactly
+/// as `~/.agents/skills` does. At project scope it is not a row, because the
+/// matrix there answers "what does this project contain" and a library of
+/// thirty skills would bury a project holding two. It is still reachable as a
+/// source from there — a transfer into a project reads user scope, so it picks
+/// up the library copy on the way through.
+pub fn skills(
+    providers: &[DetectedProvider<'_>],
+    scope: Scope,
+    library: Option<&std::path::Path>,
+) -> Vec<SkillGroup> {
+    // path -> (providers reading it, flags, per-provider precedence)
+    type DirInfo = (Vec<String>, bool, bool, Vec<(String, usize)>);
+    let mut dirs: BTreeMap<PathBuf, DirInfo> = BTreeMap::new();
     for provider in providers {
         if !provider.installed || !provider.spec.supports_skills() {
             continue;
@@ -98,17 +129,40 @@ pub fn skills(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<SkillGrou
         for dir in provider.existing_skill_dirs(scope) {
             let slot = dirs
                 .entry(dir.path.clone())
-                .or_insert_with(|| (Vec::new(), dir.shared, dir.deprecated));
+                .or_insert_with(|| (Vec::new(), dir.shared, dir.deprecated, Vec::new()));
             slot.0.push(provider.id().to_string());
             // A dir is shared in practice if any spec marks it so.
             slot.1 |= dir.shared;
             slot.2 |= dir.deprecated;
+            slot.3.push((provider.id().to_string(), dir.order));
         }
     }
 
     // identity -> locations
     let mut groups: BTreeMap<String, Vec<SkillLocation>> = BTreeMap::new();
-    for (path, (mut provider_ids, shared, deprecated)) in dirs {
+
+    // The library goes in first so it is `locations[0]` for anything it holds.
+    // Nothing depends on that ordering — `default_source` looks for the flag —
+    // but it keeps the library at the top of every listing, which is where a
+    // reader expects the copy the tool treats as the default to appear.
+    if let Some(library) = library.filter(|_| scope == Scope::User) {
+        for entry in skills::scan_dir(library, None) {
+            groups
+                .entry(entry.identity().to_string())
+                .or_default()
+                .push(SkillLocation {
+                    path: entry.path.clone(),
+                    providers: Vec::new(),
+                    entry,
+                    shared: false,
+                    deprecated: false,
+                    order: Vec::new(),
+                    library: true,
+                });
+        }
+    }
+
+    for (path, (mut provider_ids, shared, deprecated, order)) in dirs {
         provider_ids.sort();
         provider_ids.dedup();
 
@@ -129,6 +183,8 @@ pub fn skills(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<SkillGrou
                     entry,
                     shared,
                     deprecated,
+                    order: order.clone(),
+                    library: false,
                 });
         }
     }
@@ -259,15 +315,24 @@ fn resolve_pointer(doc: &Value, template: &str) -> Vec<(String, Option<String>)>
 
 /// The copy a deploy uses as its source when the caller does not choose one.
 ///
-/// Currently the first readable copy in path order — which is arbitrary, and is
-/// exactly why the UI has to *show* the answer rather than leave it implicit.
+/// **The library copy, when there is one.** That is the whole point of the
+/// library (Q-7): this function is the one place the engine has to answer
+/// "which copy is canonical?", and without a library the only available answer
+/// was the first readable copy in path order — arbitrary, which is why the UI
+/// has to *show* which copy won rather than leave it implicit.
+///
+/// With the library switched off there are no library locations, so this falls
+/// through to exactly the path-order behaviour that shipped before it. That is
+/// what keeps "library off" from being a second set of rules.
+///
 /// Both the planner and the detail view call this, so the interface can never
 /// name a different source than the one that will actually be used.
-///
-/// T-5.14 replaces the implicit choice with an explicit one; this stays as the
-/// default for callers that don't care.
 pub fn default_source(group: &SkillGroup) -> Option<&SkillLocation> {
-    group.locations.iter().find(|l| l.entry.is_ok())
+    group
+        .locations
+        .iter()
+        .find(|l| l.library && l.entry.is_ok())
+        .or_else(|| group.locations.iter().find(|l| l.entry.is_ok()))
 }
 
 /// The copy belonging to a named provider, for `--from <provider>`.
@@ -286,13 +351,25 @@ pub fn default_source(group: &SkillGroup) -> Option<&SkillLocation> {
 /// Codex lands on the shared directory by that rule, correctly: its only
 /// private directory is the deprecated one.
 pub fn source_for<'a>(group: &'a SkillGroup, provider: &str) -> Option<&'a SkillLocation> {
-    let mine = |l: &&SkillLocation| {
-        l.entry.is_ok() && l.providers.iter().any(|p| p == provider)
-    };
-    let rank = |l: &SkillLocation| match (l.shared, l.deprecated) {
-        (false, false) => 0,
-        (true, false) => 1,
-        _ => 2,
+    // The library is excluded here without a special case, because its
+    // `providers` list is empty and no harness reads it. That is deliberate:
+    // this function answers "whose version is this", and the library is not a
+    // harness. Asking for OpenCode's copy must never hand back ours.
+    let mine =
+        |l: &&SkillLocation| l.entry.is_ok() && l.providers.iter().any(|p| p == provider);
+
+    // Rank by the harness's own precedence, taken from the spec's declared
+    // order. A shared-versus-private guess gets Gemini wrong, because Gemini
+    // reads the shared `.agents/skills` *before* `.gemini/skills`.
+    // A deprecated directory is always the last resort regardless of position.
+    let rank = |l: &SkillLocation| {
+        let declared = l
+            .order
+            .iter()
+            .find(|(id, _)| id == provider)
+            .map(|(_, n)| *n)
+            .unwrap_or(usize::MAX - 1);
+        if l.deprecated { usize::MAX } else { declared }
     };
     group.locations.iter().filter(mine).min_by_key(|l| rank(l))
 }
@@ -317,6 +394,16 @@ pub fn versions(group: &SkillGroup) -> Vec<Vec<&SkillLocation>> {
     groups.into_iter().map(|(_, members)| members).collect()
 }
 
+/// When a *version* last changed: the newest of its copies.
+///
+/// A version is content, and the same content can sit in four directories
+/// written at four different moments. The newest is the one that answers the
+/// question a person is actually asking while choosing — "which of these did I
+/// touch most recently?"
+pub fn version_modified(members: &[&SkillLocation]) -> Option<std::time::SystemTime> {
+    members.iter().filter_map(|l| l.modified()).max()
+}
+
 /// One side of a comparison, with enough identity to label it.
 ///
 /// A comparison is between two *versions*, so the reader needs to know whose
@@ -326,6 +413,11 @@ pub struct CopySide {
     pub path: PathBuf,
     pub providers: Vec<String>,
     pub hash: String,
+    /// When this copy last changed. A label only — see [`crate::when`].
+    pub modified: Option<std::time::SystemTime>,
+    /// True for the `~/.inception/library` copy, so a comparison can say
+    /// "your library" instead of leaving the harness list blank.
+    pub library: bool,
 }
 
 /// A line-by-line comparison of two copies of the same skill.
@@ -373,6 +465,8 @@ pub fn compare_copies(group: &SkillGroup) -> Option<CopyComparison> {
             .skill()
             .map(|s| s.content_hash.chars().take(8).collect())
             .unwrap_or_default(),
+        modified: l.modified(),
+        library: l.library,
     };
 
     Some(CopyComparison {
@@ -415,9 +509,12 @@ mod tests {
                 dir_name: "s".into(),
                 path: PathBuf::from(path),
                 state: SkillState::Ok(Box::new(parse_skill(text, "s").unwrap())),
+                modified: None,
             },
             shared: false,
             deprecated: false,
+            order: providers.iter().map(|p| ((*p).to_string(), 0)).collect(),
+            library: false,
         }
     }
 
@@ -507,9 +604,12 @@ mod tests {
                 dir_name: "s".into(),
                 path: PathBuf::from("b"),
                 state: SkillState::MissingSkillMd,
+                modified: None,
             },
             shared: false,
             deprecated: false,
+            order: vec![("opencode".into(), 0)],
+            library: false,
         });
         assert_eq!(classify(&locs), DriftStatus::Problem);
     }

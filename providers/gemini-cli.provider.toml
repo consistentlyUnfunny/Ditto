@@ -75,6 +75,23 @@ env        = true
 # should surface it. `timeout` is in milliseconds, default 600000.
 known = ["timeout", "trust", "includeTools", "excludeTools"]
 
+# ------------------------------------------------------- instructions
+
+# Declared for `doctor` only. GEMINI.md is the native name; AGENTS.md is
+# honoured via contextFileName, which users commonly set.
+[[instructions]]
+scope = "user"
+path  = "{home}/GEMINI.md"
+
+[[instructions]]
+scope = "project"
+path  = "{project}/GEMINI.md"
+
+[[instructions]]
+scope  = "project"
+path   = "{project}/AGENTS.md"
+shared = true
+
 # ---------------------------------------------------------------- skills
 
 [skills]
@@ -82,14 +99,22 @@ supported = true
 layout    = "dir-with-skill-md"
 exclude   = [".*"]
 
+# Note the order: within a tier the `.agents/skills` alias takes precedence over
+# Gemini's own directory, so the alias is declared first. This is the one
+# harness where the shared directory outranks the private one.
+[[skills.dirs]]
+scope  = "user"
+path   = "{user_home}/.agents/skills"
+shared = true
+
 [[skills.dirs]]
 scope     = "user"
 path      = "{home}/skills"
 canonical = true
 
 [[skills.dirs]]
-scope  = "user"
-path   = "{user_home}/.agents/skills"
+scope  = "project"
+path   = "{project}/.agents/skills"
 shared = true
 
 [[skills.dirs]]

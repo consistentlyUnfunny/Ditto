@@ -82,16 +82,47 @@ parse→serialize cannot preserve — see §5 for what measurement showed.
 > "Claude Code does **not** read `~/.agents/skills/`. Use `~/.claude/skills/` instead."
 > — <https://code.claude.com/docs/en/skills>
 
-| Harness | Global skill dirs (scan order) | Project skill dir |
+**Corrected 2026-09-22.** The first pass recorded only each harness's canonical
+directory and missed most of the interoperability aliases. The full picture, from
+primary docs, in each harness's own precedence order:
+
+| Harness | User scope | Project scope |
 |---|---|---|
-| Claude Code | `~/.claude/skills` **only** | `.claude/skills` |
-| Codex | `~/.agents/skills` (canonical), `~/.codex/skills` (deprecated) | `.agents/skills` (cwd → repo root) |
-| OpenCode | `~/.config/opencode/skills`, `~/.agents/skills` | `.opencode/skills` |
-| Gemini CLI | `~/.gemini/skills`, `~/.agents/skills` | `.gemini/skills` |
-| Copilot CLI | `~/.copilot/skills`, `~/.agents/skills` | `.github/skills` |
+| Claude Code | `~/.claude/skills` **only** | `.claude/skills` only (plus `<subdir>/.claude/skills`, loaded lazily) |
+| Codex | `~/.agents/skills`, `~/.codex/skills` *(deprecated)* | `.agents/skills` (cwd → repo root) |
+| OpenCode | `~/.config/opencode/skills`, **`~/.claude/skills`**, `~/.agents/skills` | `.opencode/skills`, **`.claude/skills`**, `.agents/skills` |
+| Gemini CLI | **`~/.agents/skills` (outranks its own)**, `~/.gemini/skills` | **`.agents/skills` (outranks its own)**, `.gemini/skills` |
+| Copilot CLI | `~/.copilot/skills`, `~/.agents/skills` | `.github/skills`, **`.claude/skills`**, `.agents/skills` |
+
+Three corrections that matter:
+
+- **OpenCode reads six directories**, including `~/.claude/skills` and
+  `.claude/skills`. So Claude Code's directory is *not* private — deleting a
+  skill from it takes it away from OpenCode too. A test asserted the opposite
+  and had to be fixed; it was encoding a wrong model, not a wrong implementation.
+- **Copilot reads `.claude/skills` in a repo**, alongside `.github/skills` and
+  `.agents/skills`.
+- **Gemini's `.agents/skills` alias outranks its own directory** within a tier.
+  It is the one harness where the shared path wins, which matters for deciding
+  what "Gemini's version" means.
+
+### Coverage, both scopes
+
+| Directory | Harnesses that read it |
+|---|---|
+| `~/.agents/skills` · `.agents/skills` | codex, opencode, gemini, copilot — **4** |
+| `~/.claude/skills` | claude, opencode — **2** |
+| `.claude/skills` | claude, opencode, copilot — **3** |
+
+So **two directories cover all five harnesses at either scope**. Before this
+correction the specs declared only canonical project paths, and the planner
+would have produced *five* writes in a repo — five skill directories committed
+to version control, which is the opposite of the claim the project is built on.
+Doing this research before building the project-scope UI was the right order.
 
 Codex also reads `/etc/codex/skills` (system scope). Claude Code additionally loads
-skills from plugins (`<plugin>/skills/`) and `--add-dir` paths.
+skills from plugins (`<plugin>/skills/`) and `--add-dir` paths, and explicitly does
+**not** read any `.agents/` directory at either scope.
 
 **Product consequence:** for 4 of 5 harnesses, "install everywhere" collapses to
 *one write* to `~/.agents/skills`. Only Claude Code needs its own copy. Two writes,
@@ -231,3 +262,69 @@ and hard-won.
 - [Gemini CLI — MCP servers](https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/mcp-server.md)
 - [Copilot CLI — config directory](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference)
 - [HarnessKit](https://github.com/RealZST/HarnessKit) · [bridle](https://github.com/neiii/bridle) · [SkillDock](https://github.com/wanghuan9/skilldock)
+
+
+---
+
+## 6. Project scope (added 2026-09-22)
+
+### MCP configuration
+
+| Harness | Project file | Key path |
+|---|---|---|
+| Claude Code | `<repo>/.mcp.json` | `/mcpServers` — committed, shared with the team |
+| Claude Code (local) | `~/.claude.json` | `/projects/<abs path>/mcpServers` — *not* in the repo |
+| Codex | `<repo>/.codex/config.toml` | `[mcp_servers.<name>]` |
+| OpenCode | `<repo>/opencode.jsonc` or `.json` | `/mcp` |
+| Gemini CLI | `<repo>/.gemini/settings.json` | `/mcpServers` |
+| Copilot CLI | *none found* | user scope only |
+
+Claude Code is the only harness with two different project-ish scopes: `.mcp.json`
+is committed and shared, while "local" scope lives in the user's own
+`~/.claude.json` under the project path. The engine models both
+(`Scope::Project`, `Scope::Local`).
+
+### What makes project scope different
+
+Not the mechanics — the same directories, formats and translation apply, and the
+engine is already scope-parameterised. Three things change:
+
+1. **The files are committed.** A stray copy at user scope is one person's
+   problem; in a repo it is in everyone's checkout and shows up in review. The
+   minimum-write-set argument gets stronger and should be stated in those terms:
+   *two directories added to the repository, not five*.
+2. **Scope transfer becomes the interesting operation.** "Put my user-scope skill
+   into this project so the team gets it", and the reverse. Without it, project
+   scope is only a second view.
+3. **Drift must stay inside a scope.** A project skill differing from the user
+   one is an intentional override — the project wins in that repo, by design.
+   `skills(providers, scope)` already takes a scope, so this falls out, but it is
+   easy to break later.
+
+### Projects can be discovered, not typed
+
+Both Claude Code and Codex already record where the user works:
+`~/.claude.json` has a `projects` map, and `~/.codex/config.toml` has
+`[projects.'<path>']` trust entries. On the dev machine that is 19 recorded
+paths, 14 still on disk.
+
+**[verified: machine]** They need normalising before use:
+
+```
+D:/Projects/project-inception
+D:/projects/project-inception     <- same directory, different case
+C:/Users/User
+C:\Users\User                     <- same directory, different separator
+```
+
+Windows records the same place several ways. Without case-folding and separator
+normalisation a picker shows phantom duplicates, and the planner could treat one
+repo as two and write to it twice.
+
+### Unverified
+
+A search result claimed Gemini CLI sunsets for individual users on 2026-06-18
+with Antigravity as successor, migrating skills from `.gemini/skills` to
+`.agents/skills`. **The primary Gemini CLI docs say nothing about this**, so it
+is recorded here as a claim, not a fact. The dev machine does have a
+`~/.gemini/antigravity/` directory, which is suggestive. Tracked as Q-11.

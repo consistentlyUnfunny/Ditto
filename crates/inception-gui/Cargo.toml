@@ -17,6 +17,7 @@ inception-core = { path = "../inception-core" }
 tauri = { version = "2.11", features = [] }
 serde.workspace = true
 serde_json.workspace = true
+tauri-plugin-dialog = "2"
 
 [build-dependencies]
 tauri-build = { version = "2.6", features = [] }

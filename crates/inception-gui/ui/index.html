@@ -4,6 +4,29 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>inception</title>
+    <!--
+      Pick the theme before the stylesheet paints. Done here, inline and
+      synchronously, because any later choice — from the settings file, from a
+      module — happens after the first frame and shows a flash of the wrong
+      theme on every launch.
+
+      The preference lives in localStorage rather than in ~/.inception/config.toml
+      on purpose: it describes this window on this machine, not how the tool
+      behaves, and the settings file refuses keys it does not know, so every
+      addition there locks out an older build.
+    -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("inception-theme");
+          var dark = window.matchMedia("(prefers-color-scheme: dark)");
+          document.documentElement.dataset.theme =
+            saved === "light" || saved === "dark" ? saved : (dark.matches ? "dark" : "light");
+        } catch (_) {
+          document.documentElement.dataset.theme = "dark";
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
@@ -14,8 +37,11 @@
         <button class="tab" data-view="doctor" type="button">Doctor</button>
       </nav>
       <span class="spacer"></span>
-      <button class="iconbtn" id="refresh" type="button" title="Re-read every harness">Refresh</button>
-      <span class="scope" id="scope">reading…</span>
+      <!-- Filled with an icon by main.ts; the text is what a reader gets if the
+           script never runs, and what a screen reader gets either way. -->
+      <button class="iconbtn" id="theme" type="button" aria-label="Switch theme">Theme</button>
+      <button class="iconbtn" id="refresh" type="button" title="Re-read every harness" aria-label="Refresh">Refresh</button>
+      <button class="scope" id="scope" type="button" title="Switch between your account and a project">reading…</button>
     </header>
 
     <main id="main" class="main">

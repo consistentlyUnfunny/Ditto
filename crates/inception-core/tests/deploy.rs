@@ -677,7 +677,7 @@ fn deploying_overwrites_a_divergent_copy_the_target_also_reads() {
     // And after applying, every copy agrees.
     run(&home, &plan);
     let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
-    let groups = inception_core::inventory::skills(&providers, Scope::User);
+    let groups = inception_core::inventory::skills(&providers, Scope::User, None);
     let group = groups.iter().find(|g| g.identity == "karpathy-coder").unwrap();
     assert_eq!(
         group.distinct_hashes().len(),
@@ -739,7 +739,7 @@ fn comparison_picks_copies_that_actually_differ() {
     .unwrap();
 
     let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
-    let groups = inception_core::inventory::skills(&providers, Scope::User);
+    let groups = inception_core::inventory::skills(&providers, Scope::User, None);
     let group = groups.iter().find(|g| g.identity == "k").unwrap();
 
     let comparison = inception_core::inventory::compare_copies(group)
@@ -782,16 +782,17 @@ fn group_named<'a>(
     groups.iter().find(|g| g.identity == name).expect("group")
 }
 
-/// **"OpenCode's version" must mean OpenCode's own copy.**
+/// **"OpenCode's version" must mean the copy OpenCode actually loads.**
 ///
 /// OpenCode reads `~/.agents/skills` as well as its own directory, and the
-/// shared one sorts first — so a naive "first location serving this provider"
-/// returned the shared copy, the opposite of what `--from opencode` means.
+/// shared one sorts first alphabetically — so a naive "first location serving
+/// this provider" returned the shared copy, the opposite of what
+/// `--from opencode` means.
 #[test]
-fn source_for_prefers_a_providers_own_directory_over_a_shared_one() {
+fn source_for_follows_the_harnesss_own_precedence() {
     let (home, registry) = home_with_two_versions("sourcepick");
     let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
-    let groups = inception_core::inventory::skills(&providers, Scope::User);
+    let groups = inception_core::inventory::skills(&providers, Scope::User, None);
     let group = group_named(&groups, "k");
 
     let chosen = inception_core::inventory::source_for(group, "opencode").unwrap();
@@ -800,6 +801,56 @@ fn source_for_prefers_a_providers_own_directory_over_a_shared_one() {
     // Gemini has no private copy, so the shared one is genuinely its version.
     let gemini = inception_core::inventory::source_for(group, "gemini-cli").unwrap();
     assert_eq!(gemini.path, home.path(".agents/skills/k"));
+}
+
+/// **Precedence is per harness, not a shared-versus-private rule (T-6.7).**
+///
+/// Gemini reads `~/.agents/skills` *before* `~/.gemini/skills`, the reverse of
+/// OpenCode. So when both hold a copy, "Gemini's version" is the shared one —
+/// that is the text Gemini loads. Ranking private above shared answered this
+/// backwards for one of the five harnesses.
+#[test]
+fn source_for_reads_precedence_per_harness_not_by_sharedness() {
+    let home = FakeHome::new("sourceorder");
+    for (rel, description) in [
+        (".agents/skills/k", "The shared version."),
+        (".gemini/skills/k", "Gemini's private copy."),
+        (".config/opencode/skills/k", "OpenCode's own version."),
+    ] {
+        let dir = home.path(rel);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---
+name: k
+description: {description}
+---
+
+Body.
+"),
+        )
+        .unwrap();
+    }
+    let registry = Registry::builtin();
+    let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
+    let groups = inception_core::inventory::skills(&providers, Scope::User, None);
+    let group = group_named(&groups, "k");
+
+    // Same group, same two candidate kinds, opposite answers.
+    assert_eq!(
+        inception_core::inventory::source_for(group, "gemini-cli")
+            .unwrap()
+            .path,
+        home.path(".agents/skills/k"),
+        "gemini reads the shared directory first, so that is the copy it loads"
+    );
+    assert_eq!(
+        inception_core::inventory::source_for(group, "opencode")
+            .unwrap()
+            .path,
+        home.path(".config/opencode/skills/k"),
+        "opencode reads its own directory first"
+    );
 }
 
 /// A deprecated directory is a last resort, never the preferred source.
@@ -813,7 +864,7 @@ fn source_for_avoids_deprecated_locations() {
     }
     let registry = Registry::builtin();
     let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
-    let groups = inception_core::inventory::skills(&providers, Scope::User);
+    let groups = inception_core::inventory::skills(&providers, Scope::User, None);
 
     let chosen =
         inception_core::inventory::source_for(group_named(&groups, "k"), "codex").unwrap();
@@ -829,7 +880,7 @@ fn source_for_avoids_deprecated_locations() {
 fn choosing_the_source_decides_which_version_wins() {
     let (home, registry) = home_with_two_versions("sourcewins");
     let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
-    let groups = inception_core::inventory::skills(&providers, Scope::User);
+    let groups = inception_core::inventory::skills(&providers, Scope::User, None);
     let group = group_named(&groups, "k");
     assert_eq!(inception_core::inventory::versions(group).len(), 2);
 
@@ -848,7 +899,7 @@ fn choosing_the_source_decides_which_version_wins() {
     }
 
     let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
-    let groups = inception_core::inventory::skills(&providers, Scope::User);
+    let groups = inception_core::inventory::skills(&providers, Scope::User, None);
     assert_eq!(inception_core::inventory::versions(group_named(&groups, "k")).len(), 1);
 }
 
@@ -867,7 +918,7 @@ fn versions_group_by_content() {
     .unwrap();
 
     let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
-    let groups = inception_core::inventory::skills(&providers, Scope::User);
+    let groups = inception_core::inventory::skills(&providers, Scope::User, None);
     let versions = inception_core::inventory::versions(group_named(&groups, "k"));
 
     assert_eq!(versions.len(), 2, "three copies, two versions");
@@ -956,9 +1007,9 @@ fn removing_from_a_shared_directory_names_every_affected_harness() {
     assert!(!home.path(".agents/skills/shared-skill").exists());
 }
 
-/// A skill deployed to Claude Code's private directory affects only it.
+/// Nothing is truly private: `~/.claude/skills` serves OpenCode as well.
 #[test]
-fn removing_from_a_private_directory_affects_one_harness() {
+fn removing_from_claude_code_also_affects_opencode() {
     let home = FakeHome::new("rmprivate");
     let registry = Registry::builtin();
     let providers = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
@@ -983,7 +1034,17 @@ fn removing_from_a_private_directory_affects_one_harness() {
         Step::SkillRemove(r) => r,
         other => panic!("expected a skill removal, got {other:?}"),
     };
-    assert_eq!(step.providers, vec!["claude-code"]);
+
+    // `~/.claude/skills` is *not* private: OpenCode reads it too, alongside its
+    // own directory and `~/.agents/skills`. So deleting from it takes the skill
+    // away from OpenCode as well, and the plan has to say so before anyone
+    // confirms. This assertion used to read `["claude-code"]`, which encoded a
+    // wrong model of OpenCode rather than a wrong implementation.
+    assert_eq!(step.providers, vec!["claude-code", "opencode"]);
+
+    let preview = inception_core::plan::preview(&plan).unwrap();
+    assert!(preview.contains("shared directory"), "preview:\n{preview}");
+    assert!(preview.contains("opencode"), "preview:\n{preview}");
 }
 
 /// Deploy then remove should leave the config as it started.
@@ -1023,3 +1084,307 @@ fn deploy_then_remove_restores_the_original_config() {
 }
 
 fn _unused(_: &Path) {}
+
+// ---------------------------------------------------------------------------
+// Instruction shadowing (T-6.8)
+// ---------------------------------------------------------------------------
+
+/// **A repo holding both AGENTS.md and CLAUDE.md gives one harness two briefs.**
+///
+/// Nothing inside a harness can see this: each just loads what it finds, and the
+/// contradiction only surfaces as odd behaviour. It is exactly the class of
+/// problem a cross-harness view exists to catch.
+#[test]
+fn doctor_flags_a_repo_that_holds_two_instruction_files_for_one_harness() {
+    let home = FakeHome::new("instr");
+    let project = home.path("repo");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("AGENTS.md"), "# Agents\n\nUse tabs.\n").unwrap();
+    std::fs::write(project.join("CLAUDE.md"), "# Claude\n\nUse spaces.\n").unwrap();
+
+    let ctx = home.ctx().with_project(&project);
+    let registry = Registry::builtin();
+    let providers = inception_core::detect(&registry, &ctx, Scope::Project).unwrap();
+    let findings = inception_core::doctor::check(&providers, Scope::Project, None);
+
+    let hit = findings
+        .iter()
+        .find(|f| f.message.contains("standing instructions"))
+        .expect("a harness reading both files must be reported");
+    assert_eq!(hit.provider.as_deref(), Some("claude-code"));
+    assert!(
+        hit.message.contains("AGENTS.md") && hit.message.contains("CLAUDE.md"),
+        "the message must name both files, got: {}",
+        hit.message
+    );
+
+    // Codex reads only AGENTS.md, so it has nothing to be confused about.
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.provider.as_deref() == Some("codex")
+                && f.message.contains("standing instructions")),
+        "a harness that reads one of the two files must not be flagged"
+    );
+}
+
+/// One file alone is the normal case and must stay silent.
+#[test]
+fn doctor_is_silent_when_a_repo_holds_one_instruction_file() {
+    let home = FakeHome::new("instrone");
+    let project = home.path("repo");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("AGENTS.md"), "# Agents\n\nUse tabs.\n").unwrap();
+
+    let ctx = home.ctx().with_project(&project);
+    let registry = Registry::builtin();
+    let providers = inception_core::detect(&registry, &ctx, Scope::Project).unwrap();
+    let findings = inception_core::doctor::check(&providers, Scope::Project, None);
+
+    assert!(
+        !findings.iter().any(|f| f.message.contains("standing instructions")),
+        "a single AGENTS.md is the convention working, not a problem"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Project scope (M6)
+// ---------------------------------------------------------------------------
+
+/// **A project deploy must not commit five skill directories to a repo.**
+///
+/// This is what the M6 research pass was for. Before the specs were corrected
+/// they declared only each harness's own project directory, so serving all five
+/// meant five copies of every skill in the working tree. The shared
+/// `.agents/skills` and `.claude/skills` between them reach everyone.
+#[test]
+fn a_project_deploy_writes_two_directories_not_five() {
+    let home = FakeHome::new("projwrite");
+    let project = home.path("repo");
+    std::fs::create_dir_all(&project).unwrap();
+    let source = home.make_skill("shared-thing");
+
+    let ctx = home.ctx().with_project(&project);
+    let registry = Registry::builtin();
+    let found = inception_core::detect(&registry, &ctx, Scope::Project).unwrap();
+    let targets: Vec<String> = found.iter().map(|p| p.id().to_string()).collect();
+    let plan = inception_core::plan::skill_deploy(&found, &targets, &source, Scope::Project);
+
+    assert_eq!(
+        plan.steps.len(),
+        2,
+        "expected two directories to cover five harnesses, got: {:?}",
+        plan.steps
+            .iter()
+            .map(|s| format!("{s:?}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        plan.providers_served().len(),
+        5,
+        "two writes must still serve every harness"
+    );
+}
+
+/// Every write inside a project is a write a teammate will see (T-6.6).
+#[test]
+fn project_writes_are_reported_as_landing_inside_the_repository() {
+    let home = FakeHome::new("projgit");
+    let project = home.path("repo");
+    std::fs::create_dir_all(project.join(".git")).unwrap();
+    let source = home.make_skill("tracked");
+
+    let ctx = home.ctx().with_project(&project);
+    let registry = Registry::builtin();
+    let found = inception_core::detect(&registry, &ctx, Scope::Project).unwrap();
+    let targets: Vec<String> = found.iter().map(|p| p.id().to_string()).collect();
+    let plan = inception_core::plan::skill_deploy(&found, &targets, &source, Scope::Project);
+
+    for step in &plan.steps {
+        let dest = match step {
+            inception_core::plan::Step::Skill(s) => s.dest.clone(),
+            other => panic!("expected skill steps, got {other:?}"),
+        };
+        assert_eq!(
+            inception_core::projects::git_root(&dest).as_deref(),
+            Some(project.as_path()),
+            "{} is inside the repo and must be reported as such",
+            dest.display()
+        );
+    }
+
+    // The same skill at user scope is not a write into *this* repo. It can still
+    // land in a repo of its own — a dotfiles home is a working tree, and the dev
+    // machine has exactly that — so the claim is about which repo, not whether.
+    let user = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
+    let user_plan = inception_core::plan::skill_deploy(&user, &targets, &source, Scope::User);
+    for step in &user_plan.steps {
+        if let inception_core::plan::Step::Skill(s) = step {
+            assert_ne!(
+                inception_core::projects::git_root(&s.dest).as_deref(),
+                Some(project.as_path()),
+                "{} is a user-scope path and must not be attributed to the project repo",
+                s.dest.display()
+            );
+        }
+    }
+}
+
+/// Markers come from the specs, so adding a provider adds its markers for free.
+#[test]
+fn project_markers_are_derived_from_the_specs() {
+    let home = FakeHome::new("projmark");
+    let project = home.path("repo");
+    std::fs::create_dir_all(project.join(".claude")).unwrap();
+    std::fs::write(project.join("AGENTS.md"), "# Agents\n").unwrap();
+    std::fs::create_dir_all(project.join("src")).unwrap();
+
+    let registry = Registry::builtin();
+    let found = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
+    let described = inception_core::projects::describe(&project, &found, &[]);
+
+    assert_eq!(described.name, "repo");
+    assert!(described.markers.contains(&".claude".to_string()));
+    assert!(described.markers.contains(&"AGENTS.md".to_string()));
+    assert!(
+        !described.markers.contains(&"src".to_string()),
+        "only things a harness reads are markers, got {:?}",
+        described.markers
+    );
+    assert!(
+        described.sources.is_empty(),
+        "a hand-picked directory has no recording harness"
+    );
+}
+
+/// **An empty repository must still offer somewhere to deploy.**
+///
+/// Installed is a fact about the machine. Judged per scope, a fresh project
+/// reports no harnesses at all and the user is left staring at an empty screen
+/// with no way forward — the state every new project starts in.
+#[test]
+fn a_fresh_project_still_sees_the_harnesses_on_this_machine() {
+    let home = FakeHome::new("projfresh");
+    let project = home.path("empty-repo");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let registry = Registry::builtin();
+    let found =
+        inception_core::detect(&registry, &home.ctx().with_project(&project), Scope::Project)
+            .unwrap();
+
+    let installed: Vec<&str> = found.iter().filter(|p| p.installed).map(|p| p.id()).collect();
+    assert_eq!(
+        installed.len(),
+        5,
+        "every harness on the machine is a valid target in a new project, got {installed:?}"
+    );
+
+    // And nothing is claimed to be *in* the project, because nothing is.
+    assert!(
+        inception_core::inventory::skills(&found, Scope::Project, None).is_empty(),
+        "an empty repo holds no skills"
+    );
+}
+
+/// **A transfer is a deploy whose source sits in the other scope (F-5.9).**
+///
+/// Asserted round-trip, because the two directions are not symmetric: user scope
+/// has private per-harness directories that project scope does not.
+#[test]
+fn a_skill_transfers_into_a_project_and_back_out_again() {
+    use inception_core::scope::{Direction, transfer};
+
+    let home = FakeHome::new("xfer");
+    let project = home.path("repo");
+    std::fs::create_dir_all(&project).unwrap();
+
+    // Put the skill at user scope the way a deploy would.
+    let source = home.make_skill("portable");
+    let registry = Registry::builtin();
+    let user = inception_core::detect(&registry, &home.ctx(), Scope::User).unwrap();
+    let targets: Vec<String> = user.iter().map(|p| p.id().to_string()).collect();
+    run(
+        &home,
+        &inception_core::plan::skill_deploy(&user, &targets, &source, Scope::User),
+    );
+
+    // Into the project.
+    let plan = transfer(
+        &registry,
+        &home.ctx(),
+        &project,
+        "portable",
+        Direction::IntoProject,
+        &[],
+        None,
+    )
+    .unwrap();
+    assert_eq!(plan.providers_served().len(), 5, "every harness should see it");
+    run(&home, &plan);
+    assert!(project.join(".agents/skills/portable/SKILL.md").is_file());
+    assert!(project.join(".claude/skills/portable/SKILL.md").is_file());
+
+    // Bundled resources travel too — a skill is a directory, not a file.
+    assert!(project.join(".agents/skills/portable/scripts/helper.sh").is_file());
+
+    // Running it again is a no-op, not a second set of writes.
+    let again = transfer(
+        &registry,
+        &home.ctx(),
+        &project,
+        "portable",
+        Direction::IntoProject,
+        &[],
+        None,
+    )
+    .unwrap();
+    assert!(
+        again.steps.is_empty(),
+        "a transfer that has already happened must converge, got {} writes",
+        again.steps.len()
+    );
+
+    // And back out: the project copy becomes the user's.
+    let back = transfer(
+        &registry,
+        &home.ctx(),
+        &project,
+        "portable",
+        Direction::IntoAccount,
+        &[],
+        None,
+    )
+    .unwrap();
+    assert!(
+        back.steps.is_empty(),
+        "identical copies in both scopes means nothing to do"
+    );
+}
+
+/// A transfer of something that is not there names the scope it looked in.
+#[test]
+fn transferring_something_absent_says_where_it_looked() {
+    use inception_core::scope::{Direction, transfer};
+
+    let home = FakeHome::new("xfermiss");
+    let project = home.path("repo");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let error = transfer(
+        &Registry::builtin(),
+        &home.ctx(),
+        &project,
+        "nothing-like-this",
+        Direction::IntoProject,
+        &[],
+        None,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("user scope"),
+        "the message must say which scope was searched, got: {error}"
+    );
+}

@@ -54,14 +54,86 @@ pub struct RowView {
     pub deprecated: bool,
     /// Path of that deprecated copy, for the tooltip.
     pub deprecated_path: Option<String>,
+    /// The library's own cell. It is kept apart from `cells` because those are
+    /// harness columns, and the library is not a harness — folding it in would
+    /// have it appear in deploy target lists and in "available to" counts.
+    pub library: CellView,
 }
 
 #[derive(Serialize)]
 pub struct Overview {
     pub scope: String,
+    /// Draw the library column. False when the library is switched off, and at
+    /// project scope, where the library is not a row — see
+    /// `inception_core::inventory::skills`.
+    pub library: bool,
+    /// The project the window is pointed at, or `None` at user scope.
+    pub project: Option<ProjectView>,
     pub providers: Vec<ProviderView>,
     pub skills: Vec<RowView>,
     pub servers: Vec<RowView>,
+}
+
+#[derive(Serialize)]
+pub struct ProjectView {
+    pub path: String,
+    /// True when the user put this on the list, which is also the only case
+    /// where it can be taken off.
+    pub added: bool,
+    pub name: String,
+    pub is_git: bool,
+    /// Which harnesses have recorded this project. Empty means the user picked
+    /// the directory by hand.
+    pub sources: Vec<String>,
+    /// Project-scope config already present, e.g. `.claude`, `AGENTS.md`.
+    pub markers: Vec<String>,
+}
+
+pub fn project(p: &inception_core::projects::Project) -> ProjectView {
+    ProjectView {
+        path: p.path.display().to_string(),
+        name: p.name.clone(),
+        is_git: p.is_git,
+        sources: p.sources.clone(),
+        markers: p.markers.clone(),
+        added: p.added,
+    }
+}
+
+/// The library switch, plus where its two files live, so the panel can say what
+/// it is talking about instead of asking the reader to know.
+#[derive(Serialize)]
+pub struct LibraryView {
+    pub enabled: bool,
+    pub path: Option<String>,
+    /// Whether that directory is actually there. The window offers to open it
+    /// only when it is, because a file manager cannot be sent to a path that
+    /// does not exist and the resulting error reads as a fault in the tool.
+    pub exists: bool,
+    pub settings_path: Option<String>,
+}
+
+pub fn library_view(settings: &inception_core::Settings) -> LibraryView {
+    let dir = inception_core::settings::library_dir();
+    LibraryView {
+        enabled: settings.use_library,
+        exists: dir.as_deref().is_some_and(std::path::Path::is_dir),
+        path: dir.map(|p| p.display().to_string()),
+        settings_path: inception_core::settings::settings_path()
+            .map(|p| p.display().to_string()),
+    }
+}
+
+pub fn outcome(o: inception_core::plan::Outcome) -> OutcomeView {
+    OutcomeView {
+        target: o.target.display().to_string(),
+        providers: o.providers,
+        ok: o.result.is_ok(),
+        message: match o.result {
+            Ok(m) => m,
+            Err(e) => e,
+        },
+    }
 }
 
 pub fn providers(found: &[DetectedProvider<'_>]) -> Vec<ProviderView> {
@@ -74,6 +146,16 @@ pub fn providers(found: &[DetectedProvider<'_>]) -> Vec<ProviderView> {
             home: p.home.as_ref().map(|h| h.display().to_string()),
         })
         .collect()
+}
+
+/// A recency label for the version picker, or `None` when the filesystem will
+/// not say.
+///
+/// Formatted here rather than in TypeScript so the window and the CLI render
+/// the same words from the same function (F-9.1). Recency is a label and never
+/// a rule — `inception_core::when` says why.
+fn changed(at: Option<std::time::SystemTime>) -> Option<String> {
+    at.map(|t| inception_core::when::relative(t, std::time::SystemTime::now()))
 }
 
 fn status_label(status: DriftStatus) -> &'static str {
@@ -144,6 +226,8 @@ pub fn skill_row(group: &SkillGroup, order: &[String]) -> RowView {
         _ => None,
     };
 
+    let in_library = group.locations.iter().find(|l| l.library);
+
     RowView {
         name: group.identity.clone(),
         kind: "skill",
@@ -153,6 +237,13 @@ pub fn skill_row(group: &SkillGroup, order: &[String]) -> RowView {
         ties,
         deprecated: deprecated_at.is_some(),
         deprecated_path: deprecated_at.map(|l| l.path.display().to_string()),
+        library: match in_library {
+            Some(l) => CellView {
+                state: if l.entry.is_ok() { "on" } else { "bad" },
+                path: Some(l.path.display().to_string()),
+            },
+            None => CellView { state: "off", path: None },
+        },
     }
 }
 
@@ -169,6 +260,9 @@ pub struct CopyView {
     pub hash: String,
     pub deprecated: bool,
     pub readable: bool,
+    /// "3 days ago", or absent when the filesystem would not say.
+    pub changed: Option<String>,
+    pub library: bool,
 }
 
 #[derive(Serialize)]
@@ -176,6 +270,8 @@ pub struct SideView {
     pub path: String,
     pub providers: Vec<String>,
     pub hash: String,
+    pub changed: Option<String>,
+    pub library: bool,
 }
 
 #[derive(Serialize)]
@@ -231,6 +327,15 @@ pub struct VersionView {
     /// The path a deploy uses when this version is chosen.
     pub source: String,
     pub is_default: bool,
+    /// When this version last changed anywhere — the newest of its copies.
+    ///
+    /// Shown while choosing a winner, because "which did I touch last?" is a
+    /// real question. It never *decides* the winner: a deploy writes its
+    /// destination, so the newest file is routinely the copy rather than the
+    /// original.
+    pub changed: Option<String>,
+    /// This version is the one in your library.
+    pub library: bool,
 }
 
 /// A harness the artifact could be sent to, and whether it already has it.
@@ -260,6 +365,10 @@ pub struct SkillDetail {
     pub versions: Vec<VersionView>,
     /// Every installed harness, and whether it already has this.
     pub targets: Vec<TargetView>,
+    /// The library holds a copy of this skill.
+    pub in_library: bool,
+    /// The library is switched on, so offering to import is meaningful.
+    pub library_enabled: bool,
 }
 
 pub fn server_detail(location: &inception_core::inventory::McpLocation) -> ServerView {
@@ -279,11 +388,19 @@ pub fn server_detail(location: &inception_core::inventory::McpLocation) -> Serve
     }
 }
 
-pub fn detail(group: &SkillGroup, providers: &[DetectedProvider<'_>]) -> DetailView {
-    DetailView::Skill(Box::new(skill_detail(group, providers)))
+pub fn detail(
+    group: &SkillGroup,
+    providers: &[DetectedProvider<'_>],
+    library: bool,
+) -> DetailView {
+    DetailView::Skill(Box::new(skill_detail(group, providers, library)))
 }
 
-fn skill_detail(group: &SkillGroup, providers: &[DetectedProvider<'_>]) -> SkillDetail {
+fn skill_detail(
+    group: &SkillGroup,
+    providers: &[DetectedProvider<'_>],
+    library: bool,
+) -> SkillDetail {
     let comparison = inception_core::inventory::compare_copies(group)
         .filter(|c| inception_core::diff::has_changes(&c.lines))
         .map(|c| ComparisonView {
@@ -291,11 +408,15 @@ fn skill_detail(group: &SkillGroup, providers: &[DetectedProvider<'_>]) -> Skill
                 path: c.left.path.display().to_string(),
                 providers: c.left.providers.clone(),
                 hash: c.left.hash.clone(),
+                changed: changed(c.left.modified),
+                library: c.left.library,
             },
             right: SideView {
                 path: c.right.path.display().to_string(),
                 providers: c.right.providers.clone(),
                 hash: c.right.hash.clone(),
+                changed: changed(c.right.modified),
+                library: c.right.library,
             },
             lines: c
                 .lines
@@ -330,6 +451,8 @@ fn skill_detail(group: &SkillGroup, providers: &[DetectedProvider<'_>]) -> Skill
                 providers: who,
                 paths: locations.iter().map(|l| l.path.display().to_string()).collect(),
                 is_default: Some(&source) == default_path.as_ref(),
+                changed: changed(inception_core::inventory::version_modified(&locations)),
+                library: locations.iter().any(|l| l.library),
                 source,
             }
         })
@@ -352,6 +475,8 @@ fn skill_detail(group: &SkillGroup, providers: &[DetectedProvider<'_>]) -> Skill
     SkillDetail {
         versions,
         targets,
+        in_library: group.locations.iter().any(|l| l.library),
+        library_enabled: library,
         name: group.identity.clone(),
         status: status_label(group.status),
         comparison,
@@ -377,6 +502,8 @@ fn skill_detail(group: &SkillGroup, providers: &[DetectedProvider<'_>]) -> Skill
                         .unwrap_or_else(|| "--------".to_string()),
                     deprecated: location.deprecated,
                     readable: location.entry.is_ok(),
+                    changed: changed(location.modified()),
+                    library: location.library,
                 }
             })
             .collect(),
@@ -402,6 +529,9 @@ pub struct StepView {
     pub diff: Vec<DiffLineView>,
     pub dropped: Vec<String>,
     pub warnings: Vec<String>,
+    /// The git working tree this write lands in, if any (T-6.6). A write into a
+    /// repo is a write other people will see.
+    pub git: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -417,11 +547,26 @@ pub struct PlanView {
     pub served: Vec<String>,
 }
 
+/// Where a step writes, whatever kind it is.
+fn step_path(step: &Step) -> &std::path::Path {
+    match step {
+        Step::Config(c) => &c.path,
+        Step::Skill(s) => &s.dest,
+        Step::ConfigRemove(c) => &c.path,
+        Step::SkillRemove(s) => &s.path,
+    }
+}
+
 pub fn plan(plan: &Plan) -> PlanView {
     let steps = plan
         .steps
         .iter()
         .map(|step| {
+            // Shown per step rather than once for the plan: a single deploy can
+            // touch a repo and the user's home directory in the same breath, and
+            // only one of those is visible to a teammate.
+            let git = inception_core::projects::git_root(step_path(step))
+                .map(|root| root.display().to_string());
             let diff = inception_core::plan::step_diff(step)
                 .unwrap_or_default()
                 .into_iter()
@@ -444,6 +589,7 @@ pub fn plan(plan: &Plan) -> PlanView {
                     diff,
                     dropped: c.dropped.clone(),
                     warnings: c.warnings.clone(),
+                    git: git.clone(),
                 },
                 Step::Skill(s) => StepView {
                     kind: "skill",
@@ -457,6 +603,7 @@ pub fn plan(plan: &Plan) -> PlanView {
                     } else {
                         vec![]
                     },
+                    git: git.clone(),
                 },
                 Step::ConfigRemove(c) => StepView {
                     kind: "config-remove",
@@ -466,6 +613,7 @@ pub fn plan(plan: &Plan) -> PlanView {
                     diff,
                     dropped: vec![],
                     warnings: vec![],
+                    git: git.clone(),
                 },
                 Step::SkillRemove(s) => StepView {
                     kind: "skill-remove",
@@ -479,6 +627,7 @@ pub fn plan(plan: &Plan) -> PlanView {
                     diff,
                     dropped: vec![],
                     warnings: vec![],
+                    git: git.clone(),
                 },
             }
         })

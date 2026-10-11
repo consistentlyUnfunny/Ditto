@@ -104,10 +104,10 @@ minimum-write-set planner, diff preview, confirm-then-apply, backups, removal an
 `doctor` all working against the dev machine. `deploy`, `remove` and `doctor` are
 wired into the CLI.
 
-Outstanding: the **library/provenance** layer (T-3.9, T-3.10, T-3.13, T-3.15).
-These hang together around one design question that has not been answered yet —
-where an *imported* artifact lives once it is no longer just "the copy in
-Codex's folder". Bolting a lockfile on without deciding that would be guesswork.
+Outstanding: the **lockfile** half of provenance (T-3.9, T-3.10, T-3.15).
+The design question these hung on — where an *imported* artifact lives once it
+is no longer just "the copy in Codex's folder" — was **answered on 2026-10-10**
+and built in M7. `import` exists; the lockfile is now unblocked.
 
 - [x] **T-3.1** Emit canonical → provider shape (inverse of T-1.14).
 - [x] **T-3.2** Capability check; hard error on unsupported transport. *F-5.4*
@@ -125,13 +125,13 @@ Codex's folder". Bolting a lockfile on without deciding that would be guesswork.
   they destroy, in both the CLI and the GUI.
 - [x] **T-3.7** MCP deploy.
 - [x] **T-3.8** Surgical removal. *F-5.7*
-- [ ] **T-3.9** Lockfile `~/.inception/lock.toml`. *F-6.1, F-6.2* — blocked on the library-location decision (Q-7)
-- [ ] **T-3.10** Detect edited-in-place managed artifacts; offer re-import / overwrite / leave. *F-6.3*
+- [ ] **T-3.9** Lockfile `~/.inception/lock.toml`. *F-6.1, F-6.2* — unblocked by M7; the library is where a managed artifact comes from
+- [ ] **T-3.10** Detect edited-in-place managed artifacts; offer re-import / overwrite / leave. *F-6.3* — unblocked by M7
 - [x] **T-3.11** Partial-failure reporting. *NF-2.4*
 - [~] **T-3.12** Drift detection + diff. *F-4.1–F-4.3* — **skills only.** F-4.4
   (same-named MCP servers whose canonical form differs) was never implemented;
   this was ticked in error on 2026-09-16 and corrected on 2026-09-20.
-- [~] **T-3.13** Detection, keychain store and `Ref` resolution at emit are **done** (`secrets.rs`); the `import` command that promotes a literal is blocked on Q-7. *F-7.1–F-7.3*
+- [~] **T-3.13** Detection, keychain store and `Ref` resolution at emit are **done** (`secrets.rs`). `import` now exists for **skills** (M7); promoting a literal still waits on MCP servers being library artifacts (Q-12). *F-7.1–F-7.3*
 - [x] **T-3.14** Redaction everywhere. *F-7.4*
 - [ ] **T-3.15** Prefer native indirection (`bearer_token_env_var`). *F-7.5* — needs a spec field to declare it; not expressible in schema v1
 - [x] **T-3.16** `inception doctor`. *F-8, NF-4.4*
@@ -139,7 +139,7 @@ Codex's folder". Bolting a lockfile on without deciding that would be guesswork.
 ### M3 acceptance — the full MVP bar
 - [x] **T-3.17** `drift` reports `karpathy-coder` drifted, `minimalist-ui` identical. *MVP #3, F-4.5*
 - [x] **T-3.18** `doctor` flags deprecated `~/.codex/skills` and the plaintext Obsidian key. *MVP #4*
-- [~] **T-3.19** `deploy obsidian --to codex,claude-code` writes both, and the `config.toml` diff contains **only** the new `[mcp_servers.obsidian]` block — verified on the dev machine. The keychain half waits on `import` (Q-7). *MVP #6*
+- [~] **T-3.19** `deploy obsidian --to codex,claude-code` writes both, and the `config.toml` diff contains **only** the new `[mcp_servers.obsidian]` block — verified on the dev machine. The keychain half waits on MCP import (Q-12). *MVP #6*
 - [x] **T-3.20** `deploy karpathy-coder --to all` ⇒ exactly 2 writes, with stated reason. *MVP #7*
 - [x] **T-3.21** Every write reversible from backups. *MVP #8*
 
@@ -207,6 +207,148 @@ interface at all. The planner currently picks the first copy in path order.
 
 ---
 
+## M6 — Project scope  *(2026-09-22)*
+
+Paths verified against primary docs and recorded in
+[docs/RESEARCH.md](docs/RESEARCH.md) §2 and §6. The specs were corrected in the
+same pass — they had declared only canonical project directories, which would
+have made the planner commit five skill directories to a repo instead of two.
+
+- [x] **T-6.1** Research project-scope skill and MCP paths; correct all five specs.
+- [x] **T-6.2** Path normalisation — case-fold and normalise separators before
+  comparing or deduplicating project paths. Windows records the same repo several
+  ways, and the dev machine already has two entries for this one.
+- [x] **T-6.3** Project discovery from `~/.claude.json` projects and Codex's
+  `[projects.'...']` trust table, filtered to directories that still exist.
+  Which files, and where in them, comes from `[projects]` in the specs. Surfaced
+  as `inception projects`; ten found on the dev machine, the duplicate casings of
+  this repo correctly collapsed into one.
+- [x] **T-6.4** Scope picker in the GUI title bar; `--project` already exists on
+  every CLI read command. The title bar names the project and changes colour,
+  because the consequences of a write differ between the two scopes.
+- [x] **T-6.5** Scope transfer: "also add to this project" / "also add at user
+  scope". The operation that makes project scope worth having. Implemented as an
+  ordinary deploy whose source sits in the other scope — same planner, same
+  preview, so the transfer cannot disagree with a deploy.
+- [x] **T-6.6** Git awareness in the preview: each write says when it lands
+  inside a working tree, and names the repository. It does **not** claim whether
+  `.gitignore` covers it — a partial gitignore implementation would be worse than
+  an honest silence. Note that a dotfiles home is a working tree too, and the dev
+  machine has `C:/Users/User/.git`, so this fires at user scope there as well.
+- [x] **T-6.7** `source_for` follows the spec's declared precedence rather than a
+  shared/private heuristic. Gemini reads `.agents/skills` *before* its own
+  directory, so the old rule answered "Gemini's version" backwards for one of the
+  five. A deprecated directory stays the last resort regardless of position.
+- [x] **T-6.8** Doctor: flag a repo where **one harness loads two**
+  standing-instruction files. Stated per harness rather than as "AGENTS.md and
+  CLAUDE.md", because Claude Code now reads both — so the problem is not that the
+  two files exist, it is that one agent is handed both. Declared as data
+  (`[[instructions]]`) so no filename enters the engine (F-1.1). These files are
+  never read, written or merged; see Q-10.
+- [x] **T-6.9** *(found while building M6)* `installed` is a fact about the
+  machine, not about the project you are looking at. Judged per scope, a fresh
+  repository reported no harnesses at all and offered the user nothing to do.
+- [x] **T-6.10** *(found while building M6)* Codex's project `.agents/skills` was
+  not marked `shared`, so a project deploy planned **three** writes instead of
+  two — the same class of mistake T-6.1 was meant to fix, one scope down.
+- [x] **T-6.11** *(found while building M6)* The planner emitted writes for
+  destinations that already held exactly the same content, so a repeat deploy
+  looked like fresh work and `apply` quietly reported "already up to date". Now
+  dropped, alongside the self-copy case the planner already filtered — which is
+  what makes "nothing to do" mean something.
+- [x] **T-6.12** *(found while building M6)* A tab click in the GUI registered
+  another listener on Refresh, so after *n* switches one click fired *n*+1 scans.
+
+---
+
+## M7 — The library and recency  *(2026-10-10)*
+
+Answers **Q-7**. The library is the one thing that makes "which copy is
+canonical?" answerable: `inventory::default_source` is the single place the
+engine has to answer it, and before this its answer was "the first readable copy
+in path order" — arbitrary, which is why the UI has to *show* the winner.
+
+The shape matters more than the feature. The library is **a location, not a
+mode**: `use_library = false` stops one directory being scanned, and every
+ranking then falls through to the behaviour that shipped before it. A mode flag
+would have meant a second set of rules in the planner, in drift detection and in
+the resolve flow — four more places for the preview and the write to disagree,
+which is the class of bug every one of M6's five findings belonged to.
+
+- [x] **T-7.1** `~/.inception/config.toml` and `Settings` (`settings.rs`).
+  `use_library` defaults on; `deny_unknown_fields`, so a typo is an error rather
+  than a setting that silently does nothing.
+- [x] **T-7.2** `SkillLocation.library`, and `inventory::skills` takes the
+  library directory. Passed in rather than read from settings inside the engine,
+  so the scan stays a function of what it is handed and tests can point it at a
+  temporary directory.
+- [x] **T-7.3** `default_source` prefers the library. *F-6.5*
+- [x] **T-7.4** `source_for` still never returns it — the library has no
+  `providers`, so it falls out of that filter without a special case. "OpenCode's
+  version" must keep meaning the copy OpenCode reads (T-5.15).
+- [x] **T-7.5** `plan::skill_import`, an ordinary `Step::Skill` write, so import
+  inherits the preview, the replacement diff, backups and `apply` rather than
+  growing its own. *F-6.6*
+- [x] **T-7.6** `inception import <name> [--from <harness>]`.
+- [x] **T-7.7** GUI: library column in the matrix, kept outside the harness
+  track — the tie geometry divides that track by the number of harnesses, so
+  folding the library in would shift every staple by half a column. Plus an
+  "Add to library" action in the drawer.
+- [x] **T-7.8** The library is user scope only, but still a *source* at project
+  scope, so a transfer into a repository comes out of it. *F-6.7*
+- [x] **T-7.9** Doctor names the library when it is the side that differs.
+  "differs between codex" says nothing about what the other side is.
+- [x] **T-7.10** **Recency as a label.** `SkillEntry.modified` (newest mtime in
+  the directory, matching what the planner already compares), `when::relative`
+  for the words, shown in `list`, `drift`, the version picker and the
+  comparison header. Never consulted when choosing. *F-6.8*
+
+### Found by using it (2026-10-11)
+
+- [x] **T-7.11** The library switch existed only in `~/.inception/config.toml`,
+  so it was a setting you had to already know about to find. The column header
+  now opens a panel that explains the library and toggles it. `Settings` gained
+  `save()`, going through the same atomic write as everything else — a
+  half-written settings file would lock you out of your own tool.
+- [x] **T-7.12** **You can add a project.** Discovery reads what a *harness*
+  recorded, which by definition cannot include a repo you have never opened an
+  agent in — exactly the repo you would open the picker to set up. Hand-added
+  paths live in `settings.projects`, deduplicated with `projects::key` so one
+  repo cannot appear twice under two Windows spellings.
+  `inception projects --add <dir>` / `--forget <dir>`, plus an input and a
+  remove control in the picker.
+  - Only a hand-added project can be removed. A harness's record is that
+    harness's config; dropping it from our list would make the row vanish and
+    then come back on the next scan, so `forget` says so rather than no-op.
+  - Kept in our own settings rather than written into a harness's project
+    table: editing another tool's records to store ours would plant a trust
+    grant the user never asked for. The `C:\Users\User` entry found in M6 is
+    what that looks like from the other side.
+
+- [x] **T-7.13** Native folder browser on the project picker, via
+  `tauri-plugin-dialog`. Driven from **Rust**, not from the plugin's JS
+  binding, for two reasons: the frontend keeps its zero-dependency build, and
+  the plugin's command is never exposed to the webview, so nothing running in
+  the window can open file dialogs on its own. The picker call sits inside
+  `spawn_blocking` — the blocking picker parks its thread until the user
+  answers, and the main thread is the one the dialog needs in order to appear.
+  Choosing a folder adds it immediately; cancelling does nothing.
+
+### Deliberately not done
+
+- **Auto-import.** A deploy reads the library and never writes to it. Adoption
+  is a decision; if deploying filled the library, it would collect copies nobody
+  chose and "canonical" would mean "whatever I touched last".
+- **MCP servers in the library.** See Q-12 — this needs a decision, not just
+  code.
+*(The native folder browser listed here as skipped was built the same day —
+see T-7.13.)*
+- **`~/.inception/` as cache.** F-6.4 was amended rather than preserved. The
+  library is data; pretending otherwise would promise a rescan can rebuild
+  something it cannot.
+
+---
+
 ## M5 — Later
 
 - [ ] **T-5.1** Provider spec editor with live validation. *F-9.4*
@@ -230,9 +372,12 @@ Tracked rather than guessed at. Each needs an answer before the milestone that d
 | Q-4 | Is `~/.agents/skills` genuinely stable, or still a moving community proposal? | T-3.4 | The whole minimum-write-set advantage rests on it. Re-check before M3. |
 | Q-5 | Project-scope UX — explicit `--project` flag, or infer from cwd? | M5 | Inferring is friendlier and more dangerous. |
 | Q-6 | Should `deploy` offer to migrate deprecated paths, or only `doctor` report them? | T-5.2 | Migration mutates state the user didn't ask about. Lean report-only. |
+| Q-11 | Is Gemini CLI sunset for individual users, with Antigravity as successor? | T-6.3 | A search result says 2026-06-18 and that skills migrate to `.agents/skills`; the primary docs say nothing. The dev machine has `~/.gemini/antigravity/`. If true, the `gemini-cli` provider needs renaming or a second spec. |
+| Q-10 | Should instruction files (`AGENTS.md`, `CLAUDE.md`) be managed? | — | **Decided 2026-09-22: no.** One filename, one format, nothing to translate — the provider-spec machinery has no work to do. Detected and reported only, via T-6.8. |
 | ~~Q-9~~ | **Decided 2026-09-21: overwrite.** Resolving drift replaces a deprecated copy rather than deleting it; `doctor` keeps suggesting migration separately. Deletion stays the one thing the app only does when explicitly asked. | — | — |
 | Q-8 | Should the GUI follow the OS theme, or stay committed to the slate-and-paper world? | M4 polish | It currently commits. Theme-following would mean designing a light chassis that keeps "paper = file content" meaningful. |
-| Q-7 | Where does an **imported** artifact live? A managed library under `~/.inception/`, or does the tool stay stateless and always deploy harness-to-harness? | T-3.9, T-3.10, T-3.13 | Everything about provenance, drift resolution and `import` depends on this. A library makes "which copy is canonical?" answerable — `deploy` currently just picks the first readable one and says so. Stateless keeps the tool honest about being a translator, not a store. |
+| ~~Q-7~~ | **Decided 2026-10-10: a managed library at `~/.inception/library`, switchable off.** Built in M7. The library is a *location*, not a mode — turning it off removes a directory from the scan rather than selecting different rules. The "stateless translator" argument lost on a fact rather than on taste: `~/.inception/backups/` already held non-derivable data, so the purity being defended was gone before the question was asked. | — | — |
+| Q-12 | Should an **MCP server** be a library artifact too, and in what form? | T-3.13, MVP #6 | Skills map onto a library directory unchanged. A server does not: `McpServer.extra` is deliberately per-provider ("restored only to its own harness"), so a canonical library entry needs either per-provider extras or a rule for dropping them. That is a schema decision, which is why M7 stopped at skills. Until it is answered, promoting a literal secret on import has nowhere to live. |
 
 ---
 

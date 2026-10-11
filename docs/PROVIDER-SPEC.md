@@ -364,7 +364,64 @@ required = ["name", "description"]      # emit a warning if missing, never rewri
 
 ---
 
-## 8. Worked example — OpenCode
+## 8. `[projects]` and `[[instructions]]` — project scope
+
+Both blocks are optional, and both exist so that project-scope features stay
+data-driven. Neither is ever written to.
+
+### `[projects]` — where a harness records the projects you work in
+
+Claude Code keeps a map in `~/.claude.json`; Codex keeps a trust table in
+`config.toml`. Both are keyed by absolute project path, which is exactly the
+list a scope picker wants — it is where the user actually works, rather than
+whatever a directory crawl turns up.
+
+```toml
+[projects]
+file    = "user_json"     # a [[files]] id
+pointer = "/projects"     # RFC 6901, to a map whose KEYS are project paths
+```
+
+Only the keys are read. The values are each harness's own business.
+
+Paths are compared by a normalised key, not by string equality: separators are
+unified, an extended-length `\\?\` prefix is stripped, a trailing slash is
+dropped, and on Windows and macOS the result is case-folded. Without this the
+dev machine lists this repository twice, once as `D:/Projects/project-inception`
+and once as `D:/projects/project-inception`.
+
+### `[[instructions]]` — standing-instruction files
+
+`AGENTS.md`, `CLAUDE.md`, `GEMINI.md` and friends. **We do not manage these**
+(see Q-10): one filename, one format, nothing to translate. They are declared
+only so `doctor` can answer a question no single harness can see the answer to —
+*is one agent being handed two sets of instructions?*
+
+```toml
+[[instructions]]
+scope  = "project"
+path   = "{project}/CLAUDE.md"
+
+[[instructions]]
+scope  = "project"
+path   = "{project}/AGENTS.md"
+shared = true            # part of a convention other harnesses also read
+```
+
+Declared order is read order. The check fires when a *single provider* has more
+than one of its declared files present — so a repo holding both `AGENTS.md` and
+`CLAUDE.md` is flagged for Claude Code, which reads both, and not for Codex,
+which reads one. Stating it per harness matters: "this repo has two instruction
+files" is not itself a problem, and saying so would be noise.
+
+The first path component after `{project}/` is also reused as a *marker* when
+listing projects, alongside those from project-scope `[[files]]` and
+`[[skills.dirs]]` — so a project list can say "this repo already has `.claude`
+and `AGENTS.md`" without any filename being written into the engine.
+
+---
+
+## 9. Worked example — OpenCode
 
 The hardest of the five: JSONC, merged argv array, renamed env key, its own
 `enabled` flag, and two candidate filenames.
@@ -460,7 +517,7 @@ nothing else in the file may move:
 
 ---
 
-## 9. Validation
+## 10. Validation
 
 `inception validate <spec.toml>` must reject:
 
@@ -471,13 +528,15 @@ nothing else in the file may move:
 - a field named in `absorbs` that also appears in `[mcp.fields]`
 - a `transport.write` value for a transport absent from `capabilities.transports`
 - `canonical = true` on more than one `[[skills.dirs]]` of the same scope
+- a `[projects]` naming a `file` id that does not exist, or an invalid pointer
+- two `[[instructions]]` declaring the same path in the same scope
 
 Validation runs in CI over all built-in specs, and on load for user specs — a broken
 user spec disables that provider with a clear error rather than crashing the app.
 
 ---
 
-## 10. Deliberate non-goals for v1
+## 11. Deliberate non-goals for v1
 
 - **No expression language.** No conditionals, no arithmetic, no scripting. If a
   harness cannot be expressed declaratively, that is a signal to extend the schema

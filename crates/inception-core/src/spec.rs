@@ -40,6 +40,45 @@ pub struct ProviderSpec {
     pub mcp: Option<McpSpec>,
     #[serde(default)]
     pub skills: Option<SkillsSpec>,
+    /// Where this harness records the projects the user works in.
+    #[serde(default)]
+    pub projects: Option<ProjectsSpec>,
+    /// `[[instructions]]` blocks — the prose files a harness loads as standing
+    /// instructions, in the order it reads them.
+    #[serde(default)]
+    pub instructions: Vec<InstructionFile>,
+}
+
+/// A standing-instructions file, e.g. the cross-harness `AGENTS.md` convention
+/// or a harness's own equivalent.
+///
+/// We never read, write or merge these — the engine's scope is skills and MCP.
+/// They are declared only so `doctor` can see when one harness is loading two
+/// of them at once, which is a real source of contradictory instructions and is
+/// invisible from inside any single harness.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstructionFile {
+    pub scope: Scope,
+    pub path: String,
+    /// Part of a convention other harnesses also read.
+    #[serde(default)]
+    pub shared: bool,
+}
+
+/// Where a harness keeps its list of known projects.
+///
+/// Claude Code and Codex both maintain a map keyed by absolute project path —
+/// one for per-project settings, one for trust levels. Reading them lets the
+/// user pick a project instead of typing a path, and declaring it here keeps
+/// the engine free of harness names.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectsSpec {
+    /// References a `[[files]]` id.
+    pub file: String,
+    /// RFC 6901 pointer to a map whose *keys* are project paths.
+    pub pointer: String,
 }
 
 /// How to find the harness's base directory.
@@ -96,6 +135,16 @@ pub enum Scope {
     Project,
     /// Claude Code only: stored in the user file but namespaced per project.
     Local,
+}
+
+impl Scope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Scope::User => "user",
+            Scope::Project => "project",
+            Scope::Local => "local",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -354,6 +403,11 @@ impl ProviderSpec {
 
     pub fn supports_skills(&self) -> bool {
         self.skills.as_ref().is_some_and(|s| s.supported)
+    }
+
+    /// Instruction files for a scope, in the order this harness reads them.
+    pub fn instruction_files(&self, scope: Scope) -> Vec<&InstructionFile> {
+        self.instructions.iter().filter(|f| f.scope == scope).collect()
     }
 
     /// Skill directories for a scope, in declared order. Deprecated dirs are

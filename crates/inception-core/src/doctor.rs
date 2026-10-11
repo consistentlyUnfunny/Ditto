@@ -54,8 +54,25 @@ pub struct Finding {
     pub action: Option<Action>,
 }
 
+/// Who holds a differing copy, for the drift message.
+fn disagreeing(group: &inventory::SkillGroup) -> Vec<String> {
+    let mut who: Vec<String> = group.providers().iter().map(|p| (*p).to_string()).collect();
+    if group.locations.iter().any(|l| l.library) {
+        who.insert(0, "your library".to_string());
+    }
+    who
+}
+
 /// Run every check. Findings come back most severe first.
-pub fn check(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<Finding> {
+///
+/// `library` is `~/.inception/library` when enabled, as for
+/// [`inventory::skills`] — a library copy that disagrees with the harnesses is
+/// drift worth reporting, so it has to be in scope here too.
+pub fn check(
+    providers: &[DetectedProvider<'_>],
+    scope: Scope,
+    library: Option<&std::path::Path>,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     for provider in providers {
@@ -76,6 +93,32 @@ pub fn check(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<Finding> {
                     action: Some(Action::Reveal(file.path.clone())),
                 });
             }
+        }
+
+        // Two standing-instruction files loaded by one harness (T-6.8).
+        //
+        // Invisible from inside any single harness: each just loads what it
+        // finds. The contradiction only shows up in the agent's behaviour.
+        let loaded: Vec<&crate::discover::ResolvedInstructions> =
+            provider.existing_instructions(scope).collect();
+        if loaded.len() > 1 {
+            let names = loaded
+                .iter()
+                .map(|f| file_name(&f.path))
+                .collect::<Vec<_>>()
+                .join(" and ");
+            // Declared order is read order, so the first one is the one that wins
+            // where they disagree.
+            let first = file_name(&loaded[0].path);
+            findings.push(Finding {
+                severity: Severity::Warning,
+                provider: Some(provider.id().to_string()),
+                message: format!("{} loads both {names} as standing instructions", provider.spec.name),
+                suggestion: Some(format!(
+                    "{first} is read first; keep one, or make sure they agree"
+                )),
+                action: Some(Action::Reveal(loaded[0].path.clone())),
+            });
         }
 
         // Skills sitting in a location the harness no longer documents.
@@ -113,8 +156,14 @@ pub fn check(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<Finding> {
                     secrets.join(", "),
                     location.file.display()
                 ),
+                // `inception import` adopts *skills* into the library. It does
+                // not yet promote a server's literal to a keychain reference,
+                // because a server has nowhere canonical to live until Q-12 is
+                // answered. Pointing at a command that will not do this would be
+                // worse than naming the exposure and stopping there.
                 suggestion: Some(
-                    "run `inception import` to move it into the OS keychain".to_string(),
+                    "rotate this key if it has been shared — copying this server to another harness puts another plaintext copy on disk"
+                        .to_string(),
                 ),
                 action: Some(Action::Open(server.name.clone())),
             });
@@ -162,15 +211,18 @@ pub fn check(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<Finding> {
     }
 
     // --- Skills -----------------------------------------------------------
-    for group in inventory::skills(providers, scope) {
+    for group in inventory::skills(providers, scope, library) {
         match group.status {
+            // Name the library explicitly when it is one of the sides. It reads
+            // as no harness at all otherwise, so "differs between codex" would
+            // be the whole message for the commonest case the library creates.
             DriftStatus::Drifted => findings.push(Finding {
                 severity: Severity::Warning,
                 provider: None,
                 message: format!(
                     "skill '{}' differs between {}",
                     group.identity,
-                    group.providers().join(" and ")
+                    disagreeing(&group).join(" and ")
                 ),
                 suggestion: Some(
                     "open it to compare the versions and pick which one wins".to_string(),
@@ -203,6 +255,14 @@ pub fn check(providers: &[DetectedProvider<'_>], scope: Scope) -> Vec<Finding> {
     // Most severe first. `Reverse` because the derived ordering puts Info first.
     findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
     findings
+}
+
+/// The last component of a path, for a message that names files rather than
+/// printing two absolute paths the user already knows the directory of.
+fn file_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// Cheap near-match: same length, differing in at most two characters, or one is

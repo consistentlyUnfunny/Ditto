@@ -23,14 +23,34 @@ crates/inception-gui/target/
 *.local.toml
 /scratch/
 /tmp/
+# This tool's own settings and the library it manages. Both live under the
+# user's home, but a dev who symlinks them into the repo should not be one
+# `git add .` away from publishing their skills and project paths.
+.inception/
+# Backups written by a deploy (T-2.11). Same reason: real file contents.
+/backups/
+# Secrets never belong here. The tool puts them in the OS keychain; a .env in
+# the working directory is how they end up committed instead.
+.env
+.env.*
+!.env.example
+
+# --- Logs and crash output --------------------------------------------------
+*.log
+npm-debug.log*
+yarn-error.log*
 
 # --- Editors and OS ---------------------------------------------------------
 .DS_Store
 Thumbs.db
 desktop.ini
 .idea/
+.vscode/
 *.swp
 *~
+# Left behind by a conflicted merge or a failed patch; never meant to ship.
+*.orig
+*.rej
 
 # --- Deliberately NOT ignored -----------------------------------------------
 # Cargo.lock          — committed; this workspace produces binaries

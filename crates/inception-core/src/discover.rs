@@ -46,10 +46,15 @@ pub struct ResolvedSkillDir {
     pub canonical: bool,
     pub deprecated: bool,
     pub exists: bool,
+    /// Position in this provider's declared list, which is the harness's own
+    /// precedence order. Gemini reads `.agents/skills` *before* its own
+    /// directory, so "whose version is this" cannot be answered by a
+    /// shared-versus-private guess.
+    pub order: usize,
 }
 
 impl ResolvedSkillDir {
-    fn from(spec_dir: &SkillDir, path: PathBuf) -> ResolvedSkillDir {
+    fn from(spec_dir: &SkillDir, path: PathBuf, order: usize) -> ResolvedSkillDir {
         let exists = path.is_dir();
         ResolvedSkillDir {
             path,
@@ -58,8 +63,19 @@ impl ResolvedSkillDir {
             canonical: spec_dir.canonical,
             deprecated: spec_dir.deprecated,
             exists,
+            order,
         }
     }
+}
+
+#[derive(Debug)]
+pub struct ResolvedInstructions {
+    pub path: PathBuf,
+    pub scope: Scope,
+    pub shared: bool,
+    pub exists: bool,
+    /// Where this file sits in the harness's own read order.
+    pub order: usize,
 }
 
 #[derive(Debug)]
@@ -70,6 +86,7 @@ pub struct DetectedProvider<'a> {
     pub installed: bool,
     pub files: Vec<ResolvedFile>,
     pub skill_dirs: Vec<ResolvedSkillDir>,
+    pub instructions: Vec<ResolvedInstructions>,
 }
 
 impl DetectedProvider<'_> {
@@ -86,6 +103,13 @@ impl DetectedProvider<'_> {
         self.skill_dirs
             .iter()
             .filter(move |d| d.scope == scope && d.exists)
+    }
+
+    /// Instruction files this harness would actually load, in read order.
+    pub fn existing_instructions(&self, scope: Scope) -> impl Iterator<Item = &ResolvedInstructions> {
+        self.instructions
+            .iter()
+            .filter(move |f| f.scope == scope && f.exists)
     }
 
     /// Deprecated paths that actually hold something — a migration hint (F-2.5).
@@ -111,10 +135,26 @@ pub fn detect<'a>(
     ctx: &PathContext,
     scope: Scope,
 ) -> Result<Vec<DetectedProvider<'a>>> {
-    registry
+    let mut found: Vec<DetectedProvider<'a>> = registry
         .iter()
         .map(|spec| detect_one(spec, ctx, scope))
-        .collect()
+        .collect::<Result<_>>()?;
+
+    // Whether a harness is *installed* is a fact about the machine, not about
+    // the project you are looking at. A fresh repository contains none of a
+    // harness's files, but the harness is still there and is still a place you
+    // can deploy to — without this, project scope opens on "no harnesses found"
+    // and there is nothing the user can do from there.
+    if scope != Scope::User {
+        for (provider, machine) in found.iter_mut().zip(registry.iter()) {
+            if provider.installed {
+                continue;
+            }
+            provider.installed = detect_one(machine, ctx, Scope::User)?.installed;
+        }
+    }
+
+    Ok(found)
 }
 
 fn detect_one<'a>(
@@ -150,13 +190,26 @@ fn detect_one<'a>(
     }
 
     let mut skill_dirs = Vec::new();
-    for dir in spec.skill_dirs(scope) {
+    for (order, dir) in spec.skill_dirs(scope).into_iter().enumerate() {
         let Ok(path) = ctx.expand(&dir.path, spec) else {
             continue;
         };
-        skill_dirs.push(ResolvedSkillDir::from(dir, path));
+        skill_dirs.push(ResolvedSkillDir::from(dir, path, order));
     }
 
+    let mut instructions = Vec::new();
+    for (order, file) in spec.instruction_files(scope).into_iter().enumerate() {
+        let Ok(path) = ctx.expand(&file.path, spec) else {
+            continue;
+        };
+        instructions.push(ResolvedInstructions {
+            exists: path.is_file(),
+            path,
+            scope: file.scope,
+            shared: file.shared,
+            order,
+        });
+    }
     // Installed = there is evidence belonging to *this* harness. A harness with
     // an empty config file counts; one with nothing of its own does not.
     //
@@ -174,6 +227,7 @@ fn detect_one<'a>(
         installed,
         files,
         skill_dirs,
+        instructions,
     })
 }
 

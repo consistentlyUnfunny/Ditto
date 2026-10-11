@@ -44,6 +44,13 @@ team/multi-device sync, remote provider specs. All deferred behind
 - **F-2.4** Distinguish three empty states and never conflate them: file absent,
   file present but zero bytes, key present but `null`. *All three exist on the dev
   machine — see RESEARCH.md §4.*
+- **F-2.6** *Installed* is a fact about the machine, not about the scope being
+  inspected. A project that contains none of a harness's files must still list that
+  harness as a place to deploy — otherwise every new project opens on an empty
+  screen with nothing the user can do.
+- **F-2.7** Project paths are compared by a normalised key: separators unified, an
+  extended-length prefix stripped, a trailing separator dropped, and case folded on
+  Windows and macOS. Harnesses record the same directory several ways.
 - **F-2.5** Report a provider whose config exists at a `deprecated = true` path as
   present, with a migration hint.
 
@@ -88,16 +95,63 @@ team/multi-device sync, remote provider specs. All deferred behind
 - **F-5.6** Copy semantics only — no symlinks, no junctions. (Windows symlinks need
   Developer Mode or elevation; junctions don't work for files.)
 - **F-5.7** Removal is supported and equally surgical.
+- **F-5.8** The minimum write set holds at project scope too. *Acceptance:
+  deploying a skill into a repository for all five providers produces exactly two
+  writes — `{project}/.agents/skills` and `{project}/.claude/skills` — not five
+  directories committed to someone's tree.*
+- **F-5.9** **Scope transfer.** Copy an artifact between user scope and a project,
+  in either direction, through the same planner and preview as a deploy. A
+  transfer is a deploy whose source happens to sit in the other scope; giving it
+  its own code path would let the two disagree.
+- **F-5.10** A preview must say when a write lands inside a git working tree, and
+  name the repository. It must **not** claim whether `.gitignore` covers it: a
+  partial reimplementation of gitignore would be confidently wrong, which is worse
+  than saying nothing. Note a dotfiles home is a working tree too.
 
-## F-6 Provenance
+## F-6 Provenance and the library
 
+**Q-7 decided 2026-10-10: a managed library under `~/.inception/library`,
+switchable off.** The deciding argument was not which model is purer but which
+one answers the question the engine actually has to answer. `default_source` is
+the single place the tool must say "which copy is canonical?", and without a
+library its only available answer was "the first readable copy in path order" —
+arbitrary, which is why the interface has to *show* the winner rather than
+simply apply it.
+
+- **F-6.0** **The library is a location, not a mode.** `use_library = false`
+  removes one directory from the scan; it must not select a second set of rules.
+  Nothing in the planner, in drift detection or in the resolve flow may branch
+  on it. The evidence for this is that the rest of the suite runs with the
+  library absent, so both states are covered by one body of tests.
 - **F-6.1** Record every managed artifact in `~/.inception/lock.toml`: source,
   content hash, target provider, target path, timestamp.
 - **F-6.2** Distinguish **managed** artifacts from ones that were already there.
 - **F-6.3** Detect a managed artifact edited in place (hash mismatch) and offer
   re-import, overwrite, or leave-alone. Never silently overwrite a user edit.
-- **F-6.4** The lockfile is disposable — deleting it loses management metadata but
-  never breaks a harness. Everything is re-derivable by rescanning.
+- **F-6.4** The **lockfile** is disposable — deleting it loses management
+  metadata but never breaks a harness, and everything in it is re-derivable by
+  rescanning.
+
+  *Amended 2026-10-10.* This used to be said of `~/.inception/` as a whole,
+  which the library makes false: a skill imported and never deployed exists only
+  there. The **library is data**; the lockfile remains cache. Backups under
+  `~/.inception/backups/` were already data by the same test, so the original
+  wording had been inaccurate since T-2.11.
+- **F-6.5** `default_source` prefers the library copy. `source_for` — "which
+  copy is *this harness's*?" — must never return it: the library is not a
+  harness, and answering that question with our copy would undo T-5.15.
+- **F-6.6** A deploy reads the library and never writes to it. Adoption happens
+  only through `import`, so the library holds copies the user chose rather than
+  copies that accumulated.
+- **F-6.7** The library is a **user-scope** concept, like `~/.agents/skills`. It
+  is not a project-scope inventory row — a thirty-skill library would bury a
+  project holding two — but it stays available as a *source*, which is what
+  makes moving a skill out of the library into a repository work.
+- **F-6.8** **Recency is a label, never a rule.** Wherever copies are compared
+  or chosen between, show when each last changed; never let that decide a
+  winner. A deploy writes its destination, so the newest file is routinely the
+  copy rather than the original, and a newest-wins rule would invert itself on
+  first use. Identity stays content-based (F-4.2).
 
 ## F-7 Secrets
 
@@ -136,12 +190,19 @@ Engine-first: the GUI is a client of this, and everything is testable headlessly
 | `inception show <name>` | one artifact, canonical form, per-provider rendering |
 | `inception deploy <name> --to <ids>` | diff preview then write |
 | `inception remove <name> --from <ids>` | surgical removal |
-| `inception import <name> --from <id>` | adopt into the managed library |
+| `inception import <name> [--from <id>]` | adopt a copy into the library (F-6.5) |
 | `inception validate [spec]` | spec validation |
 | `inception doctor` | config health: deprecated paths, unknown keys, plaintext secrets |
+| `inception projects` | projects the harnesses have recorded, for `--project` |
 
 - **F-8.1** `--json` on every read command, for the GUI and for scripting.
 - **F-8.2** Exit non-zero on error; never a partial write with exit 0.
+- **F-8.3** `doctor` reports when a *single harness* loads more than one
+  standing-instruction file. Stated per harness, not as "this repo has both
+  `AGENTS.md` and `CLAUDE.md`" — two files existing is not itself a problem, and
+  Claude Code now reads both. The filenames come from `[[instructions]]` in the
+  specs, never from engine source (F-1.1). These files are otherwise out of scope:
+  one filename, one format, nothing to translate.
 
 ## F-9 GUI (M4+)
 

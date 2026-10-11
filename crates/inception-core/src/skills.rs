@@ -18,6 +18,7 @@ use crate::spec::SkillsSpec;
 use crate::tree::{self, Map, Value};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
 pub struct Skill {
@@ -48,6 +49,11 @@ pub struct SkillEntry {
     pub dir_name: String,
     pub path: PathBuf,
     pub state: SkillState,
+    /// When anything in this skill directory last changed, for the recency
+    /// label shown while choosing between copies. `None` when the filesystem
+    /// will not say — a label is allowed to be absent, which is why nothing
+    /// downstream may depend on it.
+    pub modified: Option<SystemTime>,
 }
 
 impl SkillEntry {
@@ -125,7 +131,29 @@ fn read_skill(path: &Path, dir_name: String) -> SkillEntry {
         dir_name,
         path: path.to_path_buf(),
         state,
+        modified: newest_mtime(path),
     }
+}
+
+/// The most recent modification time anywhere in a skill directory.
+///
+/// The whole tree, not just `SKILL.md`: a skill is a directory, and an edited
+/// helper script is a real change even when the frontmatter is untouched. This
+/// matches what [`crate::plan`] already compares when deciding whether a write
+/// would change anything, so the label and the planner describe the same thing.
+///
+/// Note this is deliberately *wider* than `content_hash`, which covers
+/// `SKILL.md` alone. Two copies can therefore share a hash and carry different
+/// times — which is accurate: they hold the same skill text and were written at
+/// different moments.
+fn newest_mtime(dir: &Path) -> Option<SystemTime> {
+    walkdir::WalkDir::new(dir)
+        .follow_links(false)
+        .into_iter()
+        .flatten()
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| e.metadata().ok()?.modified().ok())
+        .max()
 }
 
 /// Split frontmatter from body and parse the YAML.

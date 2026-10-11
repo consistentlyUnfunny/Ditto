@@ -370,8 +370,7 @@ pub fn skill_deploy(
                 source: source.to_path_buf(),
                 dest: existing,
                 reason: format!(
-                    "{target} reads this directory too; a different copy here would 
-                     shadow the one being installed"
+                    "{target} reads this directory too; a copy here that differs would shadow it"
                 ),
                 replaces_divergent: true,
             });
@@ -379,11 +378,99 @@ pub fn skill_deploy(
     }
     plan.steps.extend(extra.into_iter().map(Step::Skill));
 
-    // Copying a directory onto itself does nothing; drop those rather than
-    // showing the user a write that cannot change anything.
-    plan.steps.retain(|step| !matches!(step, Step::Skill(w) if w.dest == source));
+    // A write that cannot change anything is noise in the preview and a lie in
+    // the count. Two kinds: copying a directory onto itself, and copying onto a
+    // destination that already holds exactly this content. Dropping both is what
+    // makes "nothing to do" mean something — and what makes a second deploy of
+    // the same thing converge instead of looking like fresh work.
+    plan.steps.retain(|step| match step {
+        Step::Skill(w) => w.dest != source && !identical(source, &w.dest),
+        _ => true,
+    });
 
     plan
+}
+
+// ---------------------------------------------------------------------------
+// Import — adopting a copy into the library (Q-7)
+// ---------------------------------------------------------------------------
+
+/// Plan the copy of `source` into the library.
+///
+/// An import is an ordinary [`Step::Skill`] write, for the same reason a scope
+/// transfer is an ordinary deploy (F-5.9): it then shares the preview, the
+/// replacement diff, the confirmation and `apply` with every other write, and
+/// cannot quietly disagree with them. The only thing that distinguishes it is
+/// that no harness reads the destination, so `providers` is empty.
+///
+/// Deploying never calls this. Adopting a skill is a decision, not a side
+/// effect of sending it somewhere — see [`crate::settings`].
+pub fn skill_import(source: &Path, library: &Path) -> Plan {
+    let mut plan = Plan::default();
+
+    let Some(name) = source.file_name() else {
+        plan.refusals.push(Refusal {
+            provider: "library".to_string(),
+            reason: format!("{} is not a skill directory", source.display()),
+        });
+        return plan;
+    };
+
+    let dest = library.join(name);
+
+    // Importing the library's own copy back into itself is the one case that
+    // cannot do anything. Say so rather than reporting a no-op write.
+    if dest == source {
+        plan.refusals.push(Refusal {
+            provider: "library".to_string(),
+            reason: "that copy is already the library's".to_string(),
+        });
+        return plan;
+    }
+
+    if identical(source, &dest) {
+        plan.refusals.push(Refusal {
+            provider: "library".to_string(),
+            reason: "the library already holds exactly this content".to_string(),
+        });
+        return plan;
+    }
+
+    plan.steps.push(Step::Skill(SkillWrite {
+        providers: Vec::new(),
+        source: source.to_path_buf(),
+        dest,
+        reason: "your library — the copy a deploy uses when you don't name one".to_string(),
+        replaces_divergent: differs(source, &library.join(name)),
+    }));
+    plan
+}
+
+/// Whether `dest` already holds byte-for-byte what `source` would put there.
+///
+/// Compares the whole tree, not just `SKILL.md`: a skill is a directory, and a
+/// changed helper script is a real change even when the frontmatter agrees.
+fn identical(source: &Path, dest: &Path) -> bool {
+    if !dest.is_dir() {
+        return false;
+    }
+    let files = |root: &Path| -> Option<BTreeMap<PathBuf, Vec<u8>>> {
+        let mut out = BTreeMap::new();
+        for entry in walkdir::WalkDir::new(root).follow_links(false) {
+            let entry = entry.ok()?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let relative = entry.path().strip_prefix(root).ok()?.to_path_buf();
+            out.insert(relative, std::fs::read(entry.path()).ok()?);
+        }
+        Some(out)
+    };
+    match (files(source), files(dest)) {
+        (Some(a), Some(b)) => a == b,
+        // Unreadable either side: assume a write is needed and let it report.
+        _ => false,
+    }
 }
 
 /// Whether `dest` already holds a skill whose content differs from `source`.
@@ -519,11 +606,27 @@ pub fn skill_remove(
 ///
 /// Computes the new file contents *without writing them*, which means the preview
 /// is the real thing rather than a description of it.
+/// Where a step writes, whatever kind it is.
+pub fn step_target(step: &Step) -> &std::path::Path {
+    match step {
+        Step::Config(c) => &c.path,
+        Step::ConfigRemove(c) => &c.path,
+        Step::Skill(s) => &s.dest,
+        Step::SkillRemove(s) => &s.path,
+    }
+}
+
 pub fn preview(plan: &Plan) -> Result<String> {
     use std::fmt::Write as _;
     let mut out = String::new();
 
     for step in &plan.steps {
+        // F-5.10: a write inside a working tree is a write other people will see.
+        // Rendered under the path it qualifies, once the path has been printed.
+        let git = crate::projects::git_root(step_target(step))
+            .map(|root| format!("  in the git repository at {}
+", root.display()));
+
         match step {
             Step::Config(change) => {
                 let _ = writeln!(
@@ -533,6 +636,9 @@ pub fn preview(plan: &Plan) -> Result<String> {
                     change.entry_name,
                     change.providers.join(", ")
                 );
+                if let Some(note) = &git {
+                    out.push_str(note);
+                }
                 let (before, after) = render_change(change, Redact::Yes)?;
                 out.push_str(&unified_diff(&before, &after));
 
@@ -557,6 +663,9 @@ pub fn preview(plan: &Plan) -> Result<String> {
                     removal.entry_name,
                     removal.providers.join(", ")
                 );
+                if let Some(note) = &git {
+                    out.push_str(note);
+                }
                 let before = std::fs::read_to_string(&removal.path).unwrap_or_default();
                 let mut editor = Editor::parse(&before, removal.format)?;
                 editor.remove(&removal.pointer, &removal.entry_name)?;
@@ -565,6 +674,9 @@ pub fn preview(plan: &Plan) -> Result<String> {
             }
             Step::SkillRemove(removal) => {
                 let _ = writeln!(out, "{}", removal.path.display());
+                if let Some(note) = &git {
+                    out.push_str(note);
+                }
                 let _ = writeln!(out, "  - DELETE this directory and everything in it");
                 if removal.providers.len() > 1 {
                     let _ = writeln!(
@@ -579,11 +691,18 @@ pub fn preview(plan: &Plan) -> Result<String> {
             }
             Step::Skill(copy) => {
                 let _ = writeln!(out, "{}", copy.dest.display());
+                if let Some(note) = &git {
+                    out.push_str(note);
+                }
                 if copy.replaces_divergent {
                     let _ = writeln!(out, "  ! REPLACES an existing copy that differs");
                 }
                 let _ = writeln!(out, "  + copy from {}", copy.source.display());
-                let _ = writeln!(out, "  serves: {}", copy.providers.join(", "));
+                // A library write serves no harness, and "serves: " with
+                // nothing after it reads as a bug rather than as a fact.
+                if !copy.providers.is_empty() {
+                    let _ = writeln!(out, "  serves: {}", copy.providers.join(", "));
+                }
                 let _ = writeln!(out, "  reason: {}", copy.reason);
                 if copy.replaces_divergent
                     && let Ok(lines) = step_diff(step)

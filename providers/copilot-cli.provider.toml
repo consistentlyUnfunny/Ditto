@@ -68,6 +68,19 @@ transports = ["stdio", "http", "sse"]
 headers    = true
 env        = true
 
+# ------------------------------------------------------- instructions
+
+# Declared for `doctor` only. Copilot reads its own instructions file and
+# AGENTS.md, so both present means both are loaded.
+[[instructions]]
+scope = "project"
+path  = "{project}/.github/copilot-instructions.md"
+
+[[instructions]]
+scope  = "project"
+path   = "{project}/AGENTS.md"
+shared = true
+
 # ---------------------------------------------------------------- skills
 
 [skills]
@@ -85,11 +98,23 @@ scope  = "user"
 path   = "{user_home}/.agents/skills"
 shared = true
 
-# Project scope is .github/skills, not .copilot/skills.
+# Project scope is .github/skills, not .copilot/skills — and Copilot also reads
+# the Claude and agents layouts in a repo, which is what lets a project serve
+# every harness from two directories instead of five.
 [[skills.dirs]]
 scope     = "project"
 path      = "{project}/.github/skills"
 canonical = true
+
+[[skills.dirs]]
+scope  = "project"
+path   = "{project}/.claude/skills"
+shared = true
+
+[[skills.dirs]]
+scope  = "project"
+path   = "{project}/.agents/skills"
+shared = true
 
 [skills.frontmatter]
 required = ["name", "description"]
